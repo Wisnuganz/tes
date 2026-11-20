@@ -6,10 +6,14 @@ import com.example.model.TaskToolType
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.content
-import kotlinx.coroutines.CancellationException
+import com.google.firebase.appcheck.FirebaseAppCheck
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 private const val TAG = "TaskAiRepository"
 private const val MODEL_NAME = "gemini-3.8-flash"
@@ -28,12 +32,47 @@ class TaskAiRepository {
         )
     }
 
+    private suspend fun verifyAppCheckTokenReady() {
+        try {
+            withTimeout(15_000L) {
+                suspendCancellableCoroutine<Unit> { continuation ->
+                    FirebaseAppCheck.getInstance().getAppCheckToken(false)
+                        .addOnSuccessListener { result ->
+                            if (continuation.isActive) {
+                                Log.d(TAG, "App Check token ready (len=${result.token.length})")
+                                continuation.resume(Unit)
+                            }
+                        }
+                        .addOnFailureListener { error ->
+                            if (continuation.isActive) {
+                                Log.e(TAG, "App Check token request failed", error)
+                                continuation.resumeWithException(
+                                    IllegalStateException(
+                                        "Verifikasi App Check gagal: ${error.localizedMessage ?: error.javaClass.simpleName}",
+                                        error
+                                    )
+                                )
+                            }
+                        }
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            Log.e(TAG, "App Check token timed out after 15s", e)
+            throw IllegalStateException(
+                "Verifikasi App Check (reCAPTCHA) timeout setelah 15 detik. Pastikan internet & Google Play Services aktif (tidak terblokir VPN/Wi-Fi), atau uji melalui Preview AI Studio.",
+                e
+            )
+        }
+    }
+
     fun streamToolSolution(
         toolType: TaskToolType,
         userInput: String,
         attachedBitmap: Bitmap?,
         quickAnswerMode: Boolean
     ): Flow<String> = flow {
+        verifyAppCheckTokenReady()
+
         val styleRule = if (quickAnswerMode) {
             "Mode Jawaban Cepat AKTIF: Langsung berikan jawaban inti secara singkat, padat, dan jelas."
         } else {
@@ -83,6 +122,8 @@ class TaskAiRepository {
         attachedBitmap: Bitmap?,
         quickAnswerMode: Boolean
     ): Flow<String> = flow {
+        verifyAppCheckTokenReady()
+
         val scaledBitmap = attachedBitmap?.let { downscaleBitmapIfNeeded(it) }
         val modeNote = if (quickAnswerMode) {
             "(Jawab dengan ringkas & langsung ke inti jawaban)\n"

@@ -9,6 +9,7 @@ import com.example.model.SolvedTaskItem
 import com.example.model.StealthMode
 import com.example.model.TaskAssistantUiState
 import com.example.model.TaskToolType
+import com.example.overlay.ScreenProjectionService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -39,7 +41,7 @@ object AiAssistantSession {
                 AiChatMessage(
                     id = "welcome",
                     isUser = false,
-                    text = "Halo! Saya Cerdas AI (Gemini 3.8). Aktifkan Floating Overlay agar ikon tetap melayang di atas aplikasi lain, atau gunakan alat tugas di tab Tools & Chat."
+                    text = "Halo! Saya Cerdas AI (Gemini 3.8). Aktifkan Floating Overlay & Live Screen agar bisa scan soal di layar otomatis dengan 1 ketukan, atau tempel soal di Tools & Chat."
                 )
             )
         )
@@ -62,6 +64,10 @@ object AiAssistantSession {
         }
     }
 
+    fun setLiveScreenActive(active: Boolean) {
+        _uiState.update { it.copy(isLiveScreenActive = active) }
+    }
+
     fun setSystemOverlayExpanded(expanded: Boolean) {
         _uiState.update { it.copy(isSystemOverlayExpanded = expanded) }
     }
@@ -69,6 +75,65 @@ object AiAssistantSession {
     fun toggleAiPanel(open: Boolean? = null) {
         _uiState.update { state ->
             state.copy(isAiPanelOpen = open ?: !state.isAiPanelOpen)
+        }
+    }
+
+    fun captureLiveScreenAndSolve(inChatTab: Boolean, fromSystemOverlay: Boolean) {
+        if (!ScreenProjectionService.isActive()) {
+            _uiState.update { it.copy(isLiveScreenActive = false) }
+            showToast("Aktifkan izin Live Screen terlebih dahulu")
+            return
+        }
+
+        val wasSystemExpanded = _uiState.value.isSystemOverlayExpanded
+        val wasInAppOpen = _uiState.value.isAiPanelOpen
+
+        scope.launch {
+            _uiState.update {
+                it.copy(
+                    isCapturingScreen = true,
+                    isSystemOverlayExpanded = false,
+                    isAiPanelOpen = false
+                )
+            }
+            // Wait briefly so the overlay hides cleanly before grabbing the screen frame.
+            delay(260L)
+
+            val capturedBitmap = withContext(Dispatchers.Default) {
+                ScreenProjectionService.captureLatestBitmap()
+            }
+
+            _uiState.update { it.copy(isCapturingScreen = false) }
+
+            if (capturedBitmap != null) {
+                if (fromSystemOverlay) {
+                    _uiState.update { it.copy(isSystemOverlayExpanded = true) }
+                } else {
+                    _uiState.update { it.copy(isAiPanelOpen = true) }
+                }
+
+                if (inChatTab) {
+                    sendChatMessage(
+                        rawPrompt = "Baca soal atau materi yang tampil di layar ini, lalu berikan jawaban yang tepat dan mudah dipahami.",
+                        attachedBitmap = capturedBitmap
+                    )
+                } else {
+                    openToolInput(
+                        toolType = TaskToolType.SCAN_PHOTO,
+                        initialText = _uiState.value.scratchpadText,
+                        initialBitmap = capturedBitmap
+                    )
+                    runActiveTool()
+                }
+            } else {
+                _uiState.update {
+                    it.copy(
+                        isSystemOverlayExpanded = wasSystemExpanded,
+                        isAiPanelOpen = wasInAppOpen
+                    )
+                }
+                showToast("Belum ada frame layar tertangkap. Coba ketuk Scan Layar lagi.")
+            }
         }
     }
 

@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -105,7 +106,9 @@ class FloatingAiOverlayService : Service() {
         const val ACTION_STOP = "com.example.overlay.ACTION_STOP"
         const val ACTION_TOGGLE_PANEL = "com.example.overlay.ACTION_TOGGLE_PANEL"
         const val ACTION_RESET_VISIBLE = "com.example.overlay.ACTION_RESET_VISIBLE"
+        const val ACTION_SCAN_SCREEN = "com.example.overlay.ACTION_SCAN_SCREEN"
         const val EXTRA_PICK_PHOTO_FOR_TOOL = "extra_pick_photo_for_tool"
+        const val EXTRA_REQUEST_LIVE_SCREEN = "extra_request_live_screen"
     }
 
     private lateinit var windowManager: WindowManager
@@ -153,6 +156,7 @@ class FloatingAiOverlayService : Service() {
             AiAssistantSession.uiState.collectLatest { state ->
                 syncWindowVisibilityAndFlags(
                     expanded = state.isSystemOverlayExpanded,
+                    capturing = state.isCapturingScreen,
                     secure = state.isAntiCaptureEnabled || state.stealthMode == StealthMode.INVISIBLE
                 )
             }
@@ -173,6 +177,10 @@ class FloatingAiOverlayService : Service() {
             ACTION_RESET_VISIBLE -> {
                 AiAssistantSession.setStealthMode(StealthMode.NORMAL)
                 AiAssistantSession.setSystemOverlayExpanded(true)
+            }
+            ACTION_SCAN_SCREEN -> {
+                val inChat = AiAssistantSession.uiState.value.activeAiTab == com.example.model.AiPanelTab.CHAT
+                triggerOrRequestLiveScreen(inChatTab = inChat)
             }
         }
         return START_STICKY
@@ -335,6 +343,11 @@ class FloatingAiOverlayService : Service() {
                                 clipboardManager.setText(AnnotatedString(text))
                                 AiAssistantSession.showToast("Disalin ke clipboard")
                             },
+                            onScanScreen = {
+                                triggerOrRequestLiveScreen(
+                                    inChatTab = state.activeAiTab == com.example.model.AiPanelTab.CHAT
+                                )
+                            },
                             onStopSystemOverlay = {
                                 AiAssistantSession.setSystemOverlayExpanded(false)
                                 AiAssistantSession.setOverlayServiceRunning(false)
@@ -351,6 +364,22 @@ class FloatingAiOverlayService : Service() {
         windowManager.addView(bView, bParams)
     }
 
+    private fun triggerOrRequestLiveScreen(inChatTab: Boolean) {
+        if (ScreenProjectionService.isActive()) {
+            AiAssistantSession.captureLiveScreenAndSolve(
+                inChatTab = inChatTab,
+                fromSystemOverlay = true
+            )
+        } else {
+            AiAssistantSession.setSystemOverlayExpanded(false)
+            val intent = Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(EXTRA_REQUEST_LIVE_SCREEN, true)
+            }
+            startActivity(intent)
+        }
+    }
+
     private fun launchMainActivityForPhotoPicker(forTool: Boolean) {
         AiAssistantSession.setSystemOverlayExpanded(false)
         val intent = Intent(this, MainActivity::class.java).apply {
@@ -360,7 +389,11 @@ class FloatingAiOverlayService : Service() {
         startActivity(intent)
     }
 
-    private fun syncWindowVisibilityAndFlags(expanded: Boolean, secure: Boolean) {
+    private fun syncWindowVisibilityAndFlags(
+        expanded: Boolean,
+        capturing: Boolean,
+        secure: Boolean
+    ) {
         val bView = bubbleView ?: return
         val pView = panelView ?: return
         val bParams = bubbleParams ?: return
@@ -381,6 +414,15 @@ class FloatingAiOverlayService : Service() {
         } else {
             basePanelFlags
         }
+
+        if (capturing) {
+            bView.visibility = View.GONE
+            pView.visibility = View.GONE
+            return
+        }
+
+        bView.visibility = View.VISIBLE
+        pView.visibility = View.VISIBLE
 
         if (expanded) {
             if (bView.isAttachedToWindow) {
@@ -442,6 +484,13 @@ class FloatingAiOverlayService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val scanScreenIntent = PendingIntent.getService(
+            this,
+            14,
+            Intent(this, FloatingAiOverlayService::class.java).apply { action = ACTION_SCAN_SCREEN },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val stopIntent = PendingIntent.getService(
             this,
             13,
@@ -452,11 +501,11 @@ class FloatingAiOverlayService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("Cerdas AI Mengambang Aktif")
-            .setContentText("Ketuk untuk buka/tutup pop-up AI di atas aplikasi lain")
+            .setContentText("Ketuk Scan Layar atau Panel AI di atas aplikasi lain")
             .setContentIntent(openAppIntent)
             .setOngoing(true)
+            .addAction(0, "Scan Layar", scanScreenIntent)
             .addAction(0, "Panel AI", togglePanelIntent)
-            .addAction(0, "Terlihat", resetVisibleIntent)
             .addAction(0, "Matikan", stopIntent)
             .build()
     }

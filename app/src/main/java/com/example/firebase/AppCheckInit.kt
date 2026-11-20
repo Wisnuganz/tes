@@ -74,6 +74,7 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                 DebugAppCheckProviderFactory.getInstance()
             )
             Log.d(TAG, "DebugAppCheckProviderFactory installed.")
+            FirebaseAppCheck.getInstance().getAppCheckToken(false)
         } else {
             val resId = context.resources.getIdentifier(
                 RECAPTCHA_SITE_KEY_RES,
@@ -88,6 +89,10 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                     RecaptchaAppCheckProviderFactory.getInstance(siteKey)
                 )
                 Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
+                FirebaseAppCheck.getInstance().getAppCheckToken(false)
+                    .addOnFailureListener { err ->
+                        Log.w(TAG, "Pre-warm App Check token failed", err)
+                    }
             } else {
                 Log.e(TAG, "recaptcha_site_key is blank and no fallback site key is available.")
             }

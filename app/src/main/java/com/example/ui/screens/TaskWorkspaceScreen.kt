@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.FitScreen
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Security
@@ -99,6 +100,8 @@ fun TaskWorkspaceScreen(
     onOpenAiPanel: () -> Unit,
     onRequestOverlayPermission: () -> Unit,
     onToggleSystemOverlay: () -> Unit,
+    onToggleLiveScreen: () -> Unit,
+    onScanScreenNow: () -> Unit,
     onSelectStealthMode: (StealthMode) -> Unit,
     onToggleAntiCapture: () -> Unit,
     onOpenToolWithInput: (TaskToolType, String, Bitmap?) -> Unit,
@@ -335,6 +338,89 @@ fun TaskWorkspaceScreen(
                                         } else {
                                             "Jalankan Floating AI di Layar"
                                         },
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            // Live Screen (MediaProjection 1-Tap Screen Scan)
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (state.isLiveScreenActive) AiEmeraldLightBg else CbtSubtleSurface,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (state.isLiveScreenActive) AiEmerald else CbtCardBorder
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onToggleLiveScreen)
+                                    .testTag("workspace_live_screen_toggle")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.FitScreen,
+                                            contentDescription = "Live Screen",
+                                            tint = if (state.isLiveScreenActive) AiEmerald else CbtTextSecondary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Column {
+                                            Text(
+                                                text = "Live Screen (Scan Layar Otomatis)",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = CbtTextPrimary
+                                            )
+                                            Text(
+                                                text = if (state.isLiveScreenActive) {
+                                                    "Aktif • Ketuk Scan Layar di bola/panel AI"
+                                                } else {
+                                                    "Izinkan tangkap layar agar AI baca soal 1-ketuk"
+                                                },
+                                                fontSize = 11.sp,
+                                                color = CbtTextSecondary
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = if (state.isLiveScreenActive) "AKTIF" else "MATI",
+                                        color = if (state.isLiveScreenActive) AiEmerald else CbtTextSecondary,
+                                        fontFamily = JetBrainsMonoFontFamily,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            if (state.isLiveScreenActive) {
+                                OutlinedButton(
+                                    onClick = onScanScreenNow,
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = BorderStroke(1.dp, AiEmerald),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(42.dp)
+                                        .testTag("workspace_scan_screen_now_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.FitScreen,
+                                        contentDescription = "Scan Layar Sekarang",
+                                        tint = AiEmerald,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.size(6.dp))
+                                    Text(
+                                        text = "Tes Scan Layar Sekarang",
+                                        color = AiEmerald,
+                                        fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }

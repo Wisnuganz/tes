@@ -41,6 +41,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -52,7 +53,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.EditNote
-import androidx.compose.material.icons.filled.FactCheck
+import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PowerSettingsNew
@@ -138,6 +139,7 @@ fun AiAssistantOverlay(
     onNewChat: () -> Unit,
     onSendChat: (String, Bitmap?) -> Unit,
     onCopyToast: (String) -> Unit,
+    onScanScreen: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -170,7 +172,7 @@ fun AiAssistantOverlay(
     }
 
     AnimatedVisibility(
-        visible = state.isAiPanelOpen,
+        visible = state.isAiPanelOpen && !state.isCapturingScreen,
         enter = fadeIn() + scaleIn(initialScale = 0.94f),
         exit = fadeOut() + scaleOut(targetScale = 0.94f),
         modifier = modifier
@@ -223,7 +225,8 @@ fun AiAssistantOverlay(
                 onCopyText = { text ->
                     clipboardManager.setText(AnnotatedString(text))
                     onCopyToast("Jawaban disalin")
-                }
+                },
+                onScanScreen = onScanScreen
             )
         }
     }
@@ -252,6 +255,7 @@ fun AiPanelCardContent(
     onCopyText: (String) -> Unit,
     externalChatAttachedBitmap: Bitmap? = null,
     onClearExternalChatBitmap: () -> Unit = {},
+    onScanScreen: (() -> Unit)? = null,
     onStopSystemOverlay: (() -> Unit)? = null
 ) {
     val clipboardManager = LocalClipboardManager.current
@@ -472,6 +476,7 @@ fun AiPanelCardContent(
                             onSelectStealthMode = onSelectStealthMode,
                             onToggleAntiCapture = onToggleAntiCapture,
                             onOpenTool = onOpenToolInput,
+                            onScanScreen = onScanScreen,
                             onStopGeneration = onStopGeneration
                         )
                     }
@@ -556,6 +561,26 @@ fun AiPanelCardContent(
                                 tint = AiTextPrimary,
                                 modifier = Modifier.size(18.dp)
                             )
+                        }
+
+                        if (onScanScreen != null) {
+                            IconButton(
+                                onClick = onScanScreen,
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (state.isLiveScreenActive) AiEmeraldTint else AiCardDark
+                                    )
+                                    .testTag("chat_scan_screen_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FitScreen,
+                                    contentDescription = "Scan layar otomatis",
+                                    tint = if (state.isLiveScreenActive) AiEmerald else AiTextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
 
                         BasicTextField(
@@ -653,6 +678,7 @@ private fun AiHomeworkToolsGrid(
     onSelectStealthMode: (StealthMode) -> Unit,
     onToggleAntiCapture: () -> Unit,
     onOpenTool: (TaskToolType) -> Unit,
+    onScanScreen: (() -> Unit)?,
     onStopGeneration: () -> Unit
 ) {
     Column(
@@ -662,6 +688,79 @@ private fun AiHomeworkToolsGrid(
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        if (onScanScreen != null) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = if (state.isLiveScreenActive) AiEmeraldTint else AiPanelElevated,
+                border = BorderStroke(
+                    1.dp,
+                    if (state.isLiveScreenActive) AiEmerald else AiCardBorder
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onScanScreen)
+                    .testTag("panel_live_screen_scan_button")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (state.isLiveScreenActive) AiEmerald.copy(alpha = 0.22f) else AiCardDark,
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.FitScreen,
+                                    contentDescription = "Scan Layar Otomatis",
+                                    tint = if (state.isLiveScreenActive) AiEmerald else AiTextSecondary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Column {
+                            Text(
+                                text = "Scan Layar Langsung (Live Screen)",
+                                color = AiTextPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (state.isLiveScreenActive) {
+                                    "1 ketuk untuk potret layar & jawab soal otomatis"
+                                } else {
+                                    "Ketuk untuk aktifkan izin tangkap layar"
+                                },
+                                color = AiTextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (state.isLiveScreenActive) AiEmerald else AiCardDark
+                    ) {
+                        Text(
+                            text = if (state.isLiveScreenActive) "SCAN" else "AKTIFKAN",
+                            color = if (state.isLiveScreenActive) Color.White else AiEmerald,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+            }
+        }
+
         // Mode Samaran (3 Tingkat: Normal / 16% / Tak Terlihat 0%)
         Surface(
             shape = RoundedCornerShape(14.dp),
@@ -939,7 +1038,7 @@ private fun AiHomeworkToolsGrid(
                 title = TaskToolType.PROOFREAD.title,
                 subtitle = TaskToolType.PROOFREAD.subtitle,
                 badgeText = TaskToolType.PROOFREAD.badge,
-                icon = Icons.Default.FactCheck,
+                icon = Icons.AutoMirrored.Filled.FactCheck,
                 accentColor = AiEmerald,
                 isActive = false,
                 onClick = { onOpenTool(TaskToolType.PROOFREAD) },

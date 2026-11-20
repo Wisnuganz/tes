@@ -1,8 +1,11 @@
 package com.example
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -29,9 +32,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.firebase.configureAppCheck
+import com.example.model.AiPanelTab
 import com.example.model.StealthMode
 import com.example.model.TaskToolType
 import com.example.overlay.FloatingAiOverlayService
+import com.example.overlay.ScreenProjectionService
 import com.example.session.AiAssistantSession
 import com.example.ui.components.AiFloatingToastBanner
 import com.example.ui.components.DraggableFloatingAiBubble
@@ -44,6 +49,7 @@ import com.example.viewmodel.TaskAssistantViewModel
 class MainActivity : ComponentActivity() {
 
     private var pendingPhotoPickerForOverlay = false
+    private var pendingLiveScreenPermissionRequest = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,7 +65,9 @@ class MainActivity : ComponentActivity() {
             CerdasCbtTheme {
                 TaskAssistantApp(
                     initialPickPhotoRequest = pendingPhotoPickerForOverlay,
+                    initialLiveScreenRequest = pendingLiveScreenPermissionRequest,
                     onConsumePhotoRequest = { pendingPhotoPickerForOverlay = false },
+                    onConsumeLiveScreenRequest = { pendingLiveScreenPermissionRequest = false },
                     onApplySecureWindow = { secure ->
                         if (secure) {
                             window.setFlags(
@@ -86,13 +94,19 @@ class MainActivity : ComponentActivity() {
             pendingPhotoPickerForOverlay = true
             intent.removeExtra(FloatingAiOverlayService.EXTRA_PICK_PHOTO_FOR_TOOL)
         }
+        if (intent?.hasExtra(FloatingAiOverlayService.EXTRA_REQUEST_LIVE_SCREEN) == true) {
+            pendingLiveScreenPermissionRequest = true
+            intent.removeExtra(FloatingAiOverlayService.EXTRA_REQUEST_LIVE_SCREEN)
+        }
     }
 }
 
 @Composable
 fun TaskAssistantApp(
     initialPickPhotoRequest: Boolean,
+    initialLiveScreenRequest: Boolean,
     onConsumePhotoRequest: () -> Unit,
+    onConsumeLiveScreenRequest: () -> Unit,
     onApplySecureWindow: (Boolean) -> Unit,
     viewModel: TaskAssistantViewModel = viewModel()
 ) {
@@ -126,12 +140,39 @@ fun TaskAssistantApp(
         }
     }
 
+    val mediaProjectionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val serviceIntent = Intent(context, ScreenProjectionService::class.java).apply {
+                action = ScreenProjectionService.ACTION_START
+                putExtra(ScreenProjectionService.EXTRA_RESULT_CODE, result.resultCode)
+                putExtra(ScreenProjectionService.EXTRA_RESULT_DATA, result.data)
+            }
+            ContextCompat.startForegroundService(context, serviceIntent)
+        } else {
+            viewModel.showToast("Izin Live Screen dibatalkan")
+        }
+    }
+
+    val requestLiveScreenCapture: () -> Unit = {
+        val manager = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjectionLauncher.launch(manager.createScreenCaptureIntent())
+    }
+
     LaunchedEffect(initialPickPhotoRequest) {
         if (initialPickPhotoRequest) {
             onConsumePhotoRequest()
             overlayPhotoPickerLauncher.launch(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
             )
+        }
+    }
+
+    LaunchedEffect(initialLiveScreenRequest) {
+        if (initialLiveScreenRequest) {
+            onConsumeLiveScreenRequest()
+            requestLiveScreenCapture()
         }
     }
 
@@ -178,6 +219,23 @@ fun TaskAssistantApp(
                     }
                 }
             },
+            onToggleLiveScreen = {
+                if (state.isLiveScreenActive && ScreenProjectionService.isActive()) {
+                    ScreenProjectionService.stopService(context)
+                } else {
+                    requestLiveScreenCapture()
+                }
+            },
+            onScanScreenNow = {
+                if (ScreenProjectionService.isActive()) {
+                    viewModel.captureLiveScreenAndSolve(
+                        inChatTab = state.activeAiTab == AiPanelTab.CHAT,
+                        fromSystemOverlay = false
+                    )
+                } else {
+                    requestLiveScreenCapture()
+                }
+            },
             onSelectStealthMode = viewModel::setStealthMode,
             onToggleAntiCapture = viewModel::toggleAntiCapture,
             onOpenToolWithInput = viewModel::openToolInput,
@@ -188,7 +246,7 @@ fun TaskAssistantApp(
 
         DraggableFloatingAiBubble(
             stealthMode = state.stealthMode,
-            isPanelOpen = state.isAiPanelOpen,
+            isPanelOpen = state.isAiPanelOpen || state.isCapturingScreen,
             onClick = { viewModel.toggleAiPanel(open = true) }
         )
 
@@ -210,7 +268,17 @@ fun TaskAssistantApp(
             onClearError = viewModel::clearToolError,
             onNewChat = viewModel::startNewChat,
             onSendChat = viewModel::sendChatMessage,
-            onCopyToast = viewModel::showToast
+            onCopyToast = viewModel::showToast,
+            onScanScreen = {
+                if (ScreenProjectionService.isActive()) {
+                    viewModel.captureLiveScreenAndSolve(
+                        inChatTab = state.activeAiTab == AiPanelTab.CHAT,
+                        fromSystemOverlay = false
+                    )
+                } else {
+                    requestLiveScreenCapture()
+                }
+            }
         )
     }
 }

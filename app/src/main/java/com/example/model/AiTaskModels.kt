@@ -94,6 +94,8 @@ data class TaskAssistantUiState(
     val isSystemOverlayExpanded: Boolean = false,
     val hasOverlayPermission: Boolean = false,
     val isOverlayServiceRunning: Boolean = false,
+    val isLiveScreenActive: Boolean = false,
+    val isCapturingScreen: Boolean = false,
     val activeAiTab: AiPanelTab = AiPanelTab.TOOLS,
     val isQuickAnswerMode: Boolean = false,
     val stealthMode: StealthMode = StealthMode.NORMAL,

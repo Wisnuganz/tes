@@ -17,6 +17,9 @@ class TaskAssistantViewModel : ViewModel() {
 
     fun toggleAiPanel(open: Boolean? = null) = AiAssistantSession.toggleAiPanel(open)
 
+    fun captureLiveScreenAndSolve(inChatTab: Boolean, fromSystemOverlay: Boolean = false) =
+        AiAssistantSession.captureLiveScreenAndSolve(inChatTab, fromSystemOverlay)
+
     fun selectAiTab(tab: AiPanelTab) = AiAssistantSession.selectAiTab(tab)
 
     fun toggleQuickAnswerMode() = AiAssistantSession.toggleQuickAnswerMode()
