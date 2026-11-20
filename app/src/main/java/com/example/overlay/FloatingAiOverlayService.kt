@@ -52,6 +52,7 @@ import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.MainActivity
 import com.example.R
+import com.example.firebase.configureAppCheck
 import com.example.model.StealthMode
 import com.example.model.TaskToolType
 import com.example.session.AiAssistantSession
@@ -60,6 +61,7 @@ import com.example.ui.overlay.AiPanelCardContent
 import com.example.ui.theme.AiEmerald
 import com.example.ui.theme.AiEmeraldBright
 import com.example.ui.theme.CerdasCbtTheme
+import com.google.firebase.FirebaseApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -123,6 +125,10 @@ class FloatingAiOverlayService : Service() {
             AiAssistantSession.setOverlayServiceRunning(false)
             stopSelf()
             return
+        }
+
+        if (FirebaseApp.getApps(this).isEmpty()) {
+            configureAppCheck(this, null)
         }
 
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager

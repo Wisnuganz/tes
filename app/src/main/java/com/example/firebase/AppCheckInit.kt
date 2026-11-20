@@ -5,6 +5,7 @@ import android.content.Intent
 import android.util.Log
 import com.example.BuildConfig
 import com.google.firebase.FirebaseApp
+import com.google.firebase.FirebaseOptions
 import com.google.firebase.appcheck.FirebaseAppCheck
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
 import com.google.firebase.appcheck.recaptcha.RecaptchaAppCheckProviderFactory
@@ -16,11 +17,40 @@ private const val DEBUG_STORE_PREFIX = "com.google.firebase.appcheck.debug.store
 private const val DEBUG_SECRET_KEY = "com.google.firebase.appcheck.debug.DEBUG_SECRET"
 private const val RECAPTCHA_SITE_KEY_RES = "recaptcha_site_key"
 
+private const val FALLBACK_APP_ID = "1:1089453676878:android:f145cc9d3078718ce9261f"
+private const val FALLBACK_API_KEY = "AIzaSyAjTwvkPdNslUWQj3-KZxxEYlVVShuReZ4"
+private const val FALLBACK_PROJECT_ID = "gen-lang-client-0354368628"
+private const val FALLBACK_GCM_SENDER_ID = "1089453676878"
+private const val FALLBACK_STORAGE_BUCKET = "gen-lang-client-0354368628.firebasestorage.app"
+private const val FALLBACK_RECAPTCHA_SITE_KEY = "6LfwkSkuAAAAAI57Xe0-RwyNQzH9PvRArOFMW3JB"
+
+fun ensureFirebaseAppInitialized(context: Context): Boolean {
+    val appContext = context.applicationContext ?: context
+    if (FirebaseApp.getApps(appContext).isNotEmpty()) {
+        return true
+    }
+
+    val initializedFromRes = FirebaseApp.initializeApp(appContext)
+    if (initializedFromRes != null || FirebaseApp.getApps(appContext).isNotEmpty()) {
+        return true
+    }
+
+    val fallbackOptions = FirebaseOptions.Builder()
+        .setApplicationId(FALLBACK_APP_ID)
+        .setApiKey(FALLBACK_API_KEY)
+        .setProjectId(FALLBACK_PROJECT_ID)
+        .setGcmSenderId(FALLBACK_GCM_SENDER_ID)
+        .setStorageBucket(FALLBACK_STORAGE_BUCKET)
+        .build()
+
+    val initializedFallback = FirebaseApp.initializeApp(appContext, fallbackOptions)
+    Log.w(TAG, "FirebaseApp initialized using fallback FirebaseOptions (google-services resources not found).")
+    return initializedFallback != null || FirebaseApp.getApps(appContext).isNotEmpty()
+}
+
 fun configureAppCheck(context: Context, intent: Intent?) {
     try {
-        if (FirebaseApp.getApps(context).isEmpty()) {
-            FirebaseApp.initializeApp(context)
-        }
+        ensureFirebaseAppInitialized(context)
 
         if (BuildConfig.DEBUG) {
             val debugToken = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)
@@ -50,18 +80,16 @@ fun configureAppCheck(context: Context, intent: Intent?) {
                 "string",
                 context.packageName
             )
-            if (resId != 0) {
-                val siteKey = context.getString(resId)
-                if (siteKey.isNotBlank()) {
-                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                        RecaptchaAppCheckProviderFactory.getInstance(siteKey)
-                    )
-                    Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
-                } else {
-                    Log.e(TAG, "recaptcha_site_key resource string is blank.")
-                }
+            val resourceSiteKey = if (resId != 0) context.getString(resId) else ""
+            val siteKey = resourceSiteKey.ifBlank { FALLBACK_RECAPTCHA_SITE_KEY }
+
+            if (siteKey.isNotBlank()) {
+                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                    RecaptchaAppCheckProviderFactory.getInstance(siteKey)
+                )
+                Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
             } else {
-                Log.e(TAG, "recaptcha_site_key string resource not found in package.")
+                Log.e(TAG, "recaptcha_site_key is blank and no fallback site key is available.")
             }
         }
     } catch (e: Exception) {
