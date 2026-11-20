@@ -1,0 +1,6 @@
+{
+  "name": "Cerdas AI",
+  "description": "Aplikasi asisten AI mengambang untuk mengerjakan tugas sekolah dan kuliah: scan foto soal, pilihan ganda, esai, ringkasan, dan chat Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
