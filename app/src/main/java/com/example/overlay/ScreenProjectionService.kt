@@ -109,14 +109,22 @@ class ScreenProjectionService : Service() {
         }
 
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed starting foreground media projection service", e)
+            AiAssistantSession.setLiveScreenActive(false)
+            AiAssistantSession.showToast("Gagal mengaktifkan Live Screen: izin layanan ditolak sistem")
+            stopSelf()
+            return START_NOT_STICKY
         }
 
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
@@ -390,7 +398,7 @@ class ScreenProjectionService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_cerdas_ai)
             .setContentTitle("Live Screen Scan Siap")
             .setContentText("Ketuk Scan Layar di panel mengambang untuk jawab soal di layar")
             .setContentIntent(openAppIntent)

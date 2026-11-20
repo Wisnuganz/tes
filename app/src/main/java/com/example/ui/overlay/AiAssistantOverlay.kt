@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Summarize
@@ -140,6 +141,7 @@ fun AiAssistantOverlay(
     onSendChat: (String, Bitmap?) -> Unit,
     onCopyToast: (String) -> Unit,
     onScanScreen: () -> Unit,
+    onRetryLastPrompt: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -226,7 +228,8 @@ fun AiAssistantOverlay(
                     clipboardManager.setText(AnnotatedString(text))
                     onCopyToast("Jawaban disalin")
                 },
-                onScanScreen = onScanScreen
+                onScanScreen = onScanScreen,
+                onRetryLastPrompt = onRetryLastPrompt
             )
         }
     }
@@ -256,7 +259,8 @@ fun AiPanelCardContent(
     externalChatAttachedBitmap: Bitmap? = null,
     onClearExternalChatBitmap: () -> Unit = {},
     onScanScreen: (() -> Unit)? = null,
-    onStopSystemOverlay: (() -> Unit)? = null
+    onStopSystemOverlay: (() -> Unit)? = null,
+    onRetryLastPrompt: (() -> Unit)? = null
 ) {
     val clipboardManager = LocalClipboardManager.current
     var chatInputText by remember { mutableStateOf("") }
@@ -315,11 +319,17 @@ fun AiPanelCardContent(
                     )
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = AiCardDark,
-                        border = BorderStroke(1.dp, AiCardBorder)
+                        color = if (state.isQuickAnswerMode) AiEmeraldTint else AiCardDark,
+                        border = BorderStroke(
+                            1.dp,
+                            if (state.isQuickAnswerMode) AiEmerald.copy(alpha = 0.6f) else AiCardBorder
+                        ),
+                        modifier = Modifier
+                            .clickable(onClick = onToggleQuickAnswerMode)
+                            .testTag("header_quick_mode_badge")
                     ) {
                         Text(
-                            text = stringResource(R.string.ai_model_badge),
+                            text = if (state.isQuickAnswerMode) "Cepat • G3" else stringResource(R.string.ai_model_badge),
                             color = AiEmerald,
                             fontFamily = JetBrainsMonoFontFamily,
                             fontSize = 10.sp,
@@ -484,7 +494,9 @@ fun AiPanelCardContent(
                     AiChatTabContent(
                         state = state,
                         onQuickPrompt = { promptText -> onSendChat(promptText, null) },
-                        onCopyAnswer = onCopyText
+                        onScanScreen = onScanScreen,
+                        onCopyAnswer = onCopyText,
+                        onRetryLastPrompt = onRetryLastPrompt
                     )
                 }
             }
@@ -761,9 +773,9 @@ private fun AiHomeworkToolsGrid(
             }
         }
 
-        // Mode Samaran (3 Tingkat: Normal / 16% / Tak Terlihat 0%)
+        // Mode Samaran Ringkas (Normal 100% / 16% / 0%)
         Surface(
-            shape = RoundedCornerShape(14.dp),
+            shape = RoundedCornerShape(12.dp),
             color = AiPanelElevated,
             border = BorderStroke(
                 1.dp,
@@ -771,75 +783,53 @@ private fun AiHomeworkToolsGrid(
             ),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f).padding(end = 6.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.VisibilityOff,
-                            contentDescription = "Mode Samaran",
-                            tint = if (state.stealthMode != StealthMode.NORMAL) AiAmber else AiTextSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Column {
-                            Text(
-                                text = "Mode Samaran Bola AI",
-                                color = AiTextPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = state.stealthMode.description,
-                                color = AiTextSecondary,
-                                fontSize = 11.sp
-                            )
-                        }
-                    }
+                    Icon(
+                        imageVector = Icons.Default.VisibilityOff,
+                        contentDescription = "Mode Samaran",
+                        tint = if (state.stealthMode != StealthMode.NORMAL) AiAmber else AiTextSecondary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Samaran",
+                        color = AiTextPrimary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     StealthMode.entries.forEach { mode ->
                         val selected = state.stealthMode == mode
                         Surface(
-                            shape = RoundedCornerShape(9.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = if (selected) AiAmber.copy(alpha = 0.22f) else AiCardDark,
                             border = BorderStroke(1.dp, if (selected) AiAmber else AiCardBorder),
                             modifier = Modifier
-                                .weight(1f)
                                 .clickable { onSelectStealthMode(mode) }
                                 .testTag("stealth_level_${mode.name.lowercase()}")
                         ) {
-                            Column(
-                                modifier = Modifier.padding(vertical = 7.dp, horizontal = 4.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    text = mode.badge,
-                                    color = if (selected) AiAmber else AiTextPrimary,
-                                    fontFamily = JetBrainsMonoFontFamily,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = mode.label,
-                                    color = if (selected) AiTextPrimary else AiTextSecondary,
-                                    fontSize = 10.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                            Text(
+                                text = mode.badge,
+                                color = if (selected) AiAmber else AiTextSecondary,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                            )
                         }
                     }
                 }
@@ -1463,7 +1453,9 @@ private fun AiToolActionCard(
 private fun AiChatTabContent(
     state: TaskAssistantUiState,
     onQuickPrompt: (String) -> Unit,
-    onCopyAnswer: (String) -> Unit
+    onScanScreen: (() -> Unit)?,
+    onCopyAnswer: (String) -> Unit,
+    onRetryLastPrompt: (() -> Unit)? = null
 ) {
     val chatListState = rememberLazyListState()
     LaunchedEffect(state.chatMessages.size, state.chatMessages.lastOrNull()?.text?.length) {
@@ -1484,19 +1476,40 @@ private fun AiChatTabContent(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (onScanScreen != null) {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = if (state.isLiveScreenActive) AiEmeraldTint else AiPanelElevated,
+                    border = BorderStroke(
+                        1.dp,
+                        if (state.isLiveScreenActive) AiEmerald else AiCardBorder
+                    ),
+                    modifier = Modifier.clickable(onClick = onScanScreen)
+                ) {
+                    Text(
+                        text = if (state.isLiveScreenActive) "Scan Layar" else "Aktifkan Scan",
+                        color = if (state.isLiveScreenActive) AiEmerald else AiTextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
+                    )
+                }
+            }
             QuickPromptChip(
-                text = "Bantu Tugas Matematika",
-                onClick = { onQuickPrompt("Saya butuh bantuan mengerjakan soal matematika langkah demi langkah.") }
+                text = "Bantu Matematika",
+                onClick = { onQuickPrompt("Bantu selesaikan soal matematika berikut langkah demi langkah.") }
             )
             QuickPromptChip(
-                text = "Buat Kerangka Makalah",
-                onClick = { onQuickPrompt("Buatkan kerangka makalah akademik yang rapi untuk tugas kuliah.") }
+                text = "Jawab Pilihan Ganda",
+                onClick = { onQuickPrompt("Pilih jawaban A/B/C/D/E yang paling tepat dan beri alasan singkat.") }
             )
             QuickPromptChip(
-                text = "Terjemahkan & Rapikan",
-                onClick = { onQuickPrompt("Bantu terjemahkan dan perbaiki tata bahasa tugas bahasa Inggris saya.") }
+                text = "Ringkas Materi",
+                onClick = { onQuickPrompt("Ringkas materi ini menjadi poin inti yang mudah dipahami.") }
             )
         }
+
+        val lastErrorId = state.chatMessages.lastOrNull { it.isError }?.id
 
         LazyColumn(
             state = chatListState,
@@ -1509,7 +1522,8 @@ private fun AiChatTabContent(
             items(state.chatMessages, key = { it.id }) { msg ->
                 ChatBubbleItem(
                     message = msg,
-                    onCopy = { onCopyAnswer(msg.text) }
+                    onCopy = { onCopyAnswer(msg.text) },
+                    onRetry = if (msg.id == lastErrorId) onRetryLastPrompt else null
                 )
             }
         }
@@ -1540,7 +1554,8 @@ private fun QuickPromptChip(
 @Composable
 private fun ChatBubbleItem(
     message: AiChatMessage,
-    onCopy: () -> Unit
+    onCopy: () -> Unit,
+    onRetry: (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1625,6 +1640,37 @@ private fun ChatBubbleItem(
                             color = AiTextSecondary,
                             fontSize = 10.sp
                         )
+                    }
+                }
+
+                if (message.isError && onRetry != null) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = AiStopRed.copy(alpha = 0.22f),
+                        border = BorderStroke(1.dp, AiStopRed.copy(alpha = 0.55f)),
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .clickable(onClick = onRetry)
+                            .testTag("chat_retry_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Coba Lagi",
+                                tint = Color(0xFFFEE2E2),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = "Coba Lagi",
+                                color = Color(0xFFFEE2E2),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }

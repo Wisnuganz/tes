@@ -90,14 +90,14 @@ data class AiChatMessage(
 )
 
 data class TaskAssistantUiState(
-    val isAiPanelOpen: Boolean = true,
+    val isAiPanelOpen: Boolean = false,
     val isSystemOverlayExpanded: Boolean = false,
     val hasOverlayPermission: Boolean = false,
     val isOverlayServiceRunning: Boolean = false,
     val isLiveScreenActive: Boolean = false,
     val isCapturingScreen: Boolean = false,
-    val activeAiTab: AiPanelTab = AiPanelTab.TOOLS,
-    val isQuickAnswerMode: Boolean = false,
+    val activeAiTab: AiPanelTab = AiPanelTab.CHAT,
+    val isQuickAnswerMode: Boolean = true,
     val stealthMode: StealthMode = StealthMode.NORMAL,
     val isAntiCaptureEnabled: Boolean = false,
     val aiStatusText: String = "Siap • Tugas AI Engine",

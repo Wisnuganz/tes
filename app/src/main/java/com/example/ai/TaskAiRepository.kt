@@ -2,8 +2,10 @@ package com.example.ai
 
 import android.graphics.Bitmap
 import android.util.Log
+import com.example.model.AiChatMessage
 import com.example.model.TaskToolType
 import com.google.firebase.Firebase
+import com.google.firebase.ai.GenerativeModel
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Content
 import com.google.firebase.ai.type.content
@@ -28,6 +30,9 @@ private const val SYSTEM_PROMPT =
         "Berikan jawaban yang akurat, mudah dipahami, terstruktur rapi tanpa bertele-tele."
 
 class TaskAiRepository {
+
+    @Volatile
+    private var preferFastModelUntilMs: Long = 0L
 
     private val primaryModel by lazy {
         Firebase.ai.generativeModel(
@@ -94,63 +99,101 @@ class TaskAiRepository {
             msg.contains("resource exhausted")
     }
 
-    private suspend fun FlowCollector<String>.streamWithAutoFallback(requestContent: Content) {
-        var emittedFromPrimary = false
-        var shouldUseFallback = false
+    private suspend fun collectModelStream(
+        model: GenerativeModel,
+        requestContent: Content,
+        chatHistory: List<Content>,
+        timeoutMs: Long,
+        onChunk: suspend (String) -> Unit
+    ) {
+        withTimeout(timeoutMs) {
+            val flow = if (chatHistory.isEmpty()) {
+                model.generateContentStream(requestContent)
+            } else {
+                model.startChat(history = chatHistory).sendMessageStream(requestContent)
+            }
+            flow.collect { chunk ->
+                val text = chunk.text
+                if (!text.isNullOrEmpty()) {
+                    onChunk(text)
+                }
+            }
+        }
+    }
+
+    private suspend fun FlowCollector<String>.streamWithAutoFallback(
+        requestContent: Content,
+        chatHistory: List<Content> = emptyList(),
+        preferFast: Boolean = false
+    ) {
+        val useFastFirst = preferFast || System.currentTimeMillis() < preferFastModelUntilMs
+        val firstModel = if (useFastFirst) fallbackModel else primaryModel
+        val secondModel = if (useFastFirst) primaryModel else fallbackModel
+        val firstName = if (useFastFirst) FALLBACK_MODEL_NAME else PRIMARY_MODEL_NAME
+        val secondName = if (useFastFirst) PRIMARY_MODEL_NAME else FALLBACK_MODEL_NAME
+
+        var emittedFromFirst = false
+        var shouldTrySecond = false
 
         try {
-            withTimeout(30_000L) {
-                primaryModel.generateContentStream(requestContent).collect { chunk ->
-                    val text = chunk.text
-                    if (!text.isNullOrEmpty()) {
-                        emittedFromPrimary = true
-                        emit(text)
-                    }
-                }
+            collectModelStream(
+                model = firstModel,
+                requestContent = requestContent,
+                chatHistory = chatHistory,
+                timeoutMs = if (useFastFirst) 30_000L else 25_000L
+            ) { text ->
+                emittedFromFirst = true
+                emit(text)
             }
             return
         } catch (e: TimeoutCancellationException) {
-            if (!emittedFromPrimary) {
-                Log.w(TAG, "Primary model ($PRIMARY_MODEL_NAME) timed out before first chunk, falling back to $FALLBACK_MODEL_NAME", e)
-                shouldUseFallback = true
+            if (!emittedFromFirst) {
+                Log.w(TAG, "$firstName timed out before first chunk, falling back to $secondName", e)
+                if (!useFastFirst) {
+                    preferFastModelUntilMs = System.currentTimeMillis() + 5 * 60_000L
+                }
+                shouldTrySecond = true
             } else {
                 throw e
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            if (!emittedFromPrimary && isHighDemandOrTransientError(e)) {
-                Log.w(TAG, "Primary model ($PRIMARY_MODEL_NAME) high demand/transient error, falling back to $FALLBACK_MODEL_NAME", e)
-                shouldUseFallback = true
+            if (!emittedFromFirst && isHighDemandOrTransientError(e)) {
+                Log.w(TAG, "$firstName transient/high-demand error, falling back to $secondName", e)
+                if (!useFastFirst) {
+                    preferFastModelUntilMs = System.currentTimeMillis() + 5 * 60_000L
+                }
+                shouldTrySecond = true
             } else {
                 throw e
             }
         }
 
-        if (shouldUseFallback) {
-            var emittedFromFallback = false
+        if (shouldTrySecond) {
+            var emittedFromSecond = false
             try {
-                withTimeout(45_000L) {
-                    fallbackModel.generateContentStream(requestContent).collect { chunk ->
-                        val text = chunk.text
-                        if (!text.isNullOrEmpty()) {
-                            emittedFromFallback = true
-                            emit(text)
-                        }
-                    }
+                collectModelStream(
+                    model = secondModel,
+                    requestContent = requestContent,
+                    chatHistory = chatHistory,
+                    timeoutMs = 45_000L
+                ) { text ->
+                    emittedFromSecond = true
+                    emit(text)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (!emittedFromFallback && isHighDemandOrTransientError(e)) {
-                    delay(1200L)
-                    withTimeout(45_000L) {
-                        fallbackModel.generateContentStream(requestContent).collect { chunk ->
-                            val text = chunk.text
-                            if (!text.isNullOrEmpty()) {
-                                emit(text)
-                            }
-                        }
+                if (!emittedFromSecond && isHighDemandOrTransientError(e)) {
+                    delay(1000L)
+                    collectModelStream(
+                        model = firstModel,
+                        requestContent = requestContent,
+                        chatHistory = chatHistory,
+                        timeoutMs = 45_000L
+                    ) { text ->
+                        emit(text)
                     }
                 } else {
                     throw e
@@ -201,13 +244,17 @@ class TaskAiRepository {
             }
             text(fullPrompt)
         }
-        streamWithAutoFallback(requestContent)
+        streamWithAutoFallback(
+            requestContent = requestContent,
+            preferFast = quickAnswerMode
+        )
     }
 
     fun streamChat(
         prompt: String,
         attachedBitmap: Bitmap?,
-        quickAnswerMode: Boolean
+        quickAnswerMode: Boolean,
+        priorMessages: List<AiChatMessage> = emptyList()
     ): Flow<String> = flow {
         verifyAppCheckTokenReady()
 
@@ -218,13 +265,26 @@ class TaskAiRepository {
             ""
         }
 
-        val requestContent = content {
+        val historyContent = priorMessages
+            .filter { !it.isError && !it.isStreaming && it.id != "welcome" && it.text.isNotBlank() }
+            .takeLast(8)
+            .map { msg ->
+                content(role = if (msg.isUser) "user" else "model") {
+                    text(msg.text)
+                }
+            }
+
+        val requestContent = content(role = "user") {
             if (scaledBitmap != null) {
                 image(scaledBitmap)
             }
             text("$modeNote$prompt")
         }
-        streamWithAutoFallback(requestContent)
+        streamWithAutoFallback(
+            requestContent = requestContent,
+            chatHistory = historyContent,
+            preferFast = quickAnswerMode
+        )
     }
 
     private fun downscaleBitmapIfNeeded(bitmap: Bitmap, maxDimension: Int = 1600): Bitmap {

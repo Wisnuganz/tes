@@ -207,7 +207,11 @@ fun TaskAssistantApp(
                     val stopIntent = Intent(context, FloatingAiOverlayService::class.java).apply {
                         action = FloatingAiOverlayService.ACTION_STOP
                     }
-                    context.startService(stopIntent)
+                    try {
+                        context.startService(stopIntent)
+                    } catch (_: Exception) {
+                        AiAssistantSession.setOverlayServiceRunning(false)
+                    }
                 } else if (Settings.canDrawOverlays(context)) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -246,7 +250,7 @@ fun TaskAssistantApp(
 
         DraggableFloatingAiBubble(
             stealthMode = state.stealthMode,
-            isPanelOpen = state.isAiPanelOpen || state.isCapturingScreen,
+            isPanelOpen = state.isAiPanelOpen || state.isCapturingScreen || state.isOverlayServiceRunning,
             onClick = { viewModel.toggleAiPanel(open = true) }
         )
 
@@ -278,7 +282,8 @@ fun TaskAssistantApp(
                 } else {
                     requestLiveScreenCapture()
                 }
-            }
+            },
+            onRetryLastPrompt = viewModel::retryLastUserPrompt
         )
     }
 }
@@ -287,5 +292,10 @@ private fun startFloatingOverlayService(context: android.content.Context) {
     val intent = Intent(context, FloatingAiOverlayService::class.java).apply {
         action = FloatingAiOverlayService.ACTION_START
     }
-    ContextCompat.startForegroundService(context, intent)
+    try {
+        ContextCompat.startForegroundService(context, intent)
+    } catch (e: Exception) {
+        AiAssistantSession.setOverlayServiceRunning(false)
+        AiAssistantSession.showToast("Gagal menyalakan overlay: ${e.localizedMessage ?: "izin latar belakang ditolak"}")
+    }
 }

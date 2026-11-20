@@ -41,7 +41,7 @@ object AiAssistantSession {
                 AiChatMessage(
                     id = "welcome",
                     isUser = false,
-                    text = "Halo! Saya Cerdas AI (Gemini 3.8). Aktifkan Floating Overlay & Live Screen agar bisa scan soal di layar otomatis dengan 1 ketukan, atau tempel soal di Tools & Chat."
+                    text = "Halo! Saya Cerdas AI. Ketik soal atau ketuk Scan Layar untuk menjawab otomatis di atas aplikasi lain."
                 )
             )
         )
@@ -121,7 +121,8 @@ object AiAssistantSession {
                     openToolInput(
                         toolType = TaskToolType.SCAN_PHOTO,
                         initialText = _uiState.value.scratchpadText,
-                        initialBitmap = capturedBitmap
+                        initialBitmap = capturedBitmap,
+                        openInAppPanel = !fromSystemOverlay
                     )
                     runActiveTool()
                 }
@@ -178,10 +179,15 @@ object AiAssistantSession {
         _uiState.update { it.copy(scratchpadText = text) }
     }
 
-    fun openToolInput(toolType: TaskToolType, initialText: String = "", initialBitmap: Bitmap? = null) {
+    fun openToolInput(
+        toolType: TaskToolType,
+        initialText: String = "",
+        initialBitmap: Bitmap? = null,
+        openInAppPanel: Boolean = true
+    ) {
         _uiState.update {
             it.copy(
-                isAiPanelOpen = true,
+                isAiPanelOpen = if (openInAppPanel) true else it.isAiPanelOpen,
                 activeAiTab = AiPanelTab.TOOLS,
                 activeToolInputDialog = toolType,
                 pendingToolText = initialText,
@@ -330,6 +336,8 @@ object AiAssistantSession {
             prompt
         }
 
+        val historySnapshot = _uiState.value.chatMessages
+
         val userMsg = AiChatMessage(
             id = UUID.randomUUID().toString(),
             isUser = true,
@@ -348,7 +356,7 @@ object AiAssistantSession {
             it.copy(
                 activeAiTab = AiPanelTab.CHAT,
                 isGenerating = true,
-                aiStatusText = "Gemini sedang mengerjakan...",
+                aiStatusText = "Mengirim ke Gemini...",
                 chatMessages = it.chatMessages + userMsg + aiPlaceholder
             )
         }
@@ -360,7 +368,8 @@ object AiAssistantSession {
                 aiRepository.streamChat(
                     prompt = effectivePrompt,
                     attachedBitmap = attachedBitmap,
-                    quickAnswerMode = _uiState.value.isQuickAnswerMode
+                    quickAnswerMode = _uiState.value.isQuickAnswerMode,
+                    priorMessages = historySnapshot
                 ).collect { chunk ->
                     accumulated.append(chunk)
                     updateChatMessage(modelMsgId, accumulated.toString(), isStreaming = true, isError = false)
@@ -398,7 +407,7 @@ object AiAssistantSession {
                 Log.e(TAG, "Chat generation timed out", e)
                 updateChatMessage(
                     modelMsgId,
-                    "Waktu respons Gemini habis setelah 60 detik. Silakan coba lagi.",
+                    "Waktu respons Gemini habis. Ketuk Coba Lagi atau aktifkan Mode Cepat.",
                     isStreaming = false,
                     isError = true
                 )
@@ -421,6 +430,18 @@ object AiAssistantSession {
         }
     }
 
+    fun retryLastUserPrompt() {
+        val currentMessages = _uiState.value.chatMessages
+        val lastUserMsg = currentMessages.lastOrNull { it.isUser } ?: return
+        // Drop trailing failed AI message & duplicate user prompt before retrying cleanly
+        val lastUserIdx = currentMessages.indexOfLast { it.id == lastUserMsg.id }
+        if (lastUserIdx >= 0) {
+            val trimmed = currentMessages.take(lastUserIdx)
+            _uiState.update { it.copy(chatMessages = trimmed) }
+        }
+        sendChatMessage(lastUserMsg.text, lastUserMsg.attachedBitmap)
+    }
+
     fun stopGeneration() {
         activeStreamJob?.cancel()
         _uiState.update {
@@ -441,7 +462,7 @@ object AiAssistantSession {
                     AiChatMessage(
                         id = UUID.randomUUID().toString(),
                         isUser = false,
-                        text = "Sesi baru siap. Foto soal, tempel teks tugas, atau tanyakan materi apa saja ke Gemini 3.8."
+                        text = "Sesi baru siap. Ketik soal, lampirkan foto, atau ketuk Scan Layar untuk dijawab otomatis."
                     )
                 )
             )

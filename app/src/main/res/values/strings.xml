@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">Cerdas AI</string>
     <string name="ai_brand_title">Cerdas AI</string>
-    <string name="ai_model_badge">Gemini 3.8</string>
+    <string name="ai_model_badge">Gemini 3</string>
     <string name="workspace_title">Asisten Tugas AI</string>
     <string name="workspace_subtitle">Foto soal, tempel teks, atau gunakan panel mengambang untuk mengerjakan tugas dengan cepat.</string>
 </resources>

@@ -50,6 +50,8 @@ class TaskAssistantViewModel : ViewModel() {
     fun sendChatMessage(rawPrompt: String, attachedBitmap: Bitmap? = null) =
         AiAssistantSession.sendChatMessage(rawPrompt, attachedBitmap)
 
+    fun retryLastUserPrompt() = AiAssistantSession.retryLastUserPrompt()
+
     fun stopGeneration() = AiAssistantSession.stopGeneration()
 
     fun startNewChat() = AiAssistantSession.startNewChat()

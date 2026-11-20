@@ -12,22 +12,23 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
+import android.util.Log
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,16 +38,21 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
@@ -54,8 +60,8 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.example.MainActivity
 import com.example.R
 import com.example.firebase.configureAppCheck
+import com.example.model.AiPanelTab
 import com.example.model.StealthMode
-import com.example.model.TaskToolType
 import com.example.session.AiAssistantSession
 import com.example.ui.components.AiKnotOrbIcon
 import com.example.ui.overlay.AiPanelCardContent
@@ -69,20 +75,26 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
+private const val TAG = "FloatingAiOverlaySvc"
 private const val CHANNEL_ID = "cerdas_ai_overlay_channel"
 private const val NOTIFICATION_ID = 4102
 
-class OverlayLifecycleOwner : LifecycleOwner, SavedStateRegistryOwner {
+class OverlayLifecycleOwner : LifecycleOwner, SavedStateRegistryOwner, ViewModelStoreOwner {
     private val lifecycleRegistry = LifecycleRegistry(this)
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
+    private val store = ViewModelStore()
 
     override val lifecycle: Lifecycle
         get() = lifecycleRegistry
 
     override val savedStateRegistry: SavedStateRegistry
         get() = savedStateRegistryController.savedStateRegistry
+
+    override val viewModelStore: ViewModelStore
+        get() = store
 
     fun onCreate() {
         savedStateRegistryController.performAttach()
@@ -93,9 +105,12 @@ class OverlayLifecycleOwner : LifecycleOwner, SavedStateRegistryOwner {
     }
 
     fun onDestroy() {
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        try {
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        } catch (_: Exception) {}
+        store.clear()
     }
 }
 
@@ -119,13 +134,48 @@ class FloatingAiOverlayService : Service() {
     private var panelView: ComposeView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var panelParams: WindowManager.LayoutParams? = null
+    private var lastAppliedExpanded: Boolean? = null
+    private var lastAppliedCapturing: Boolean? = null
+    private var lastAppliedSecure: Boolean? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        if (!Settings.canDrawOverlays(this)) {
+        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        createNotificationChannel()
+
+        val notification = buildNotification()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start foreground overlay service", e)
+            Toast.makeText(
+                this,
+                "Gagal memulai layanan overlay: ${e.localizedMessage ?: "izin latar belakang ditolak"}",
+                Toast.LENGTH_LONG
+            ).show()
             AiAssistantSession.setOverlayServiceRunning(false)
+            stopSelf()
+            return
+        }
+
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(
+                this,
+                "Aktifkan izin Tampil di Atas Aplikasi Lain terlebih dahulu.",
+                Toast.LENGTH_SHORT
+            ).show()
+            AiAssistantSession.setOverlayServiceRunning(false)
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
         }
@@ -134,22 +184,16 @@ class FloatingAiOverlayService : Service() {
             configureAppCheck(this, null)
         }
 
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         lifecycleOwner.onCreate()
-        createNotificationChannel()
 
-        val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        val windowsAttached = setupOverlayWindows()
+        if (!windowsAttached) {
+            AiAssistantSession.setOverlayServiceRunning(false)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
         }
 
-        setupOverlayWindows()
         AiAssistantSession.setOverlayServiceRunning(true)
 
         serviceScope.launch {
@@ -164,11 +208,20 @@ class FloatingAiOverlayService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!Settings.canDrawOverlays(this)) {
+            AiAssistantSession.setOverlayServiceRunning(false)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         when (intent?.action) {
             ACTION_STOP -> {
                 AiAssistantSession.setSystemOverlayExpanded(false)
                 AiAssistantSession.setOverlayServiceRunning(false)
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+                return START_NOT_STICKY
             }
             ACTION_TOGGLE_PANEL -> {
                 val next = !AiAssistantSession.uiState.value.isSystemOverlayExpanded
@@ -179,7 +232,7 @@ class FloatingAiOverlayService : Service() {
                 AiAssistantSession.setSystemOverlayExpanded(true)
             }
             ACTION_SCAN_SCREEN -> {
-                val inChat = AiAssistantSession.uiState.value.activeAiTab == com.example.model.AiPanelTab.CHAT
+                val inChat = AiAssistantSession.uiState.value.activeAiTab == AiPanelTab.CHAT
                 triggerOrRequestLiveScreen(inChatTab = inChat)
             }
         }
@@ -195,7 +248,8 @@ class FloatingAiOverlayService : Service() {
         }
     }
 
-    private fun setupOverlayWindows() {
+    private fun setupOverlayWindows(): Boolean {
+        val themedContext = ContextThemeWrapper(this, R.style.Theme_MyApplication)
         val displayMetrics = resources.displayMetrics
         val density = displayMetrics.density
         val bubblePx = (62 * density).roundToInt()
@@ -214,9 +268,13 @@ class FloatingAiOverlayService : Service() {
         }
         bubbleParams = bParams
 
-        val bView = ComposeView(this).apply {
+        val bView = ComposeView(themedContext).apply {
             setViewTreeLifecycleOwner(lifecycleOwner)
             setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+            setViewTreeViewModelStoreOwner(lifecycleOwner)
+            setViewCompositionStrategy(
+                ViewCompositionStrategy.DisposeOnLifecycleDestroyed(lifecycleOwner)
+            )
             setContent {
                 CerdasCbtTheme {
                     val state by AiAssistantSession.uiState.collectAsStateWithLifecycle()
@@ -257,22 +315,47 @@ class FloatingAiOverlayService : Service() {
                                 }
                             )
                             .pointerInput(Unit) {
-                                detectDragGestures { change, dragAmount ->
-                                    change.consume()
-                                    val lp = bubbleParams ?: return@detectDragGestures
-                                    val maxX = (displayMetrics.widthPixels - bubblePx).coerceAtLeast(0)
-                                    val maxY = (displayMetrics.heightPixels - bubblePx).coerceAtLeast(0)
-                                    lp.x = (lp.x + dragAmount.x.roundToInt()).coerceIn(0, maxX)
-                                    lp.y = (lp.y + dragAmount.y.roundToInt()).coerceIn(0, maxY)
-                                    bubbleView?.let { v ->
-                                        if (v.isAttachedToWindow) {
-                                            windowManager.updateViewLayout(v, lp)
+                                val touchSlopPx = 10f * density
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    var totalDragX = 0f
+                                    var totalDragY = 0f
+                                    var dragged = false
+
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id }
+                                            ?: event.changes.firstOrNull()
+                                            ?: break
+                                        if (!change.pressed) {
+                                            if (!dragged) {
+                                                AiAssistantSession.setSystemOverlayExpanded(true)
+                                            }
+                                            break
+                                        }
+                                        val delta = change.positionChange()
+                                        totalDragX += abs(delta.x)
+                                        totalDragY += abs(delta.y)
+                                        if (!dragged && (totalDragX > touchSlopPx || totalDragY > touchSlopPx)) {
+                                            dragged = true
+                                        }
+                                        if (dragged && (delta.x != 0f || delta.y != 0f)) {
+                                            change.consume()
+                                            val lp = bubbleParams ?: continue
+                                            val maxX = (displayMetrics.widthPixels - bubblePx).coerceAtLeast(0)
+                                            val maxY = (displayMetrics.heightPixels - bubblePx).coerceAtLeast(0)
+                                            lp.x = (lp.x + delta.x.roundToInt()).coerceIn(0, maxX)
+                                            lp.y = (lp.y + delta.y.roundToInt()).coerceIn(0, maxY)
+                                            bubbleView?.let { v ->
+                                                if (v.isAttachedToWindow) {
+                                                    try {
+                                                        windowManager.updateViewLayout(v, lp)
+                                                    } catch (_: Exception) {}
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            .clickable {
-                                AiAssistantSession.setSystemOverlayExpanded(true)
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -291,19 +374,26 @@ class FloatingAiOverlayService : Service() {
             panelWidth,
             WindowManager.LayoutParams.WRAP_CONTENT,
             overlayWindowType(),
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             y = (44 * density).roundToInt()
+            @Suppress("DEPRECATION")
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
         panelParams = pParams
 
-        val pView = ComposeView(this).apply {
+        val pView = ComposeView(themedContext).apply {
+            visibility = View.GONE
             setViewTreeLifecycleOwner(lifecycleOwner)
             setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+            setViewTreeViewModelStoreOwner(lifecycleOwner)
+            setViewCompositionStrategy(
+                ViewCompositionStrategy.DisposeOnLifecycleDestroyed(lifecycleOwner)
+            )
             setContent {
                 CerdasCbtTheme {
                     val state by AiAssistantSession.uiState.collectAsStateWithLifecycle()
@@ -345,14 +435,16 @@ class FloatingAiOverlayService : Service() {
                             },
                             onScanScreen = {
                                 triggerOrRequestLiveScreen(
-                                    inChatTab = state.activeAiTab == com.example.model.AiPanelTab.CHAT
+                                    inChatTab = state.activeAiTab == AiPanelTab.CHAT
                                 )
                             },
                             onStopSystemOverlay = {
                                 AiAssistantSession.setSystemOverlayExpanded(false)
                                 AiAssistantSession.setOverlayServiceRunning(false)
+                                stopForeground(STOP_FOREGROUND_REMOVE)
                                 stopSelf()
-                            }
+                            },
+                            onRetryLastPrompt = AiAssistantSession::retryLastUserPrompt
                         )
                     }
                 }
@@ -360,8 +452,25 @@ class FloatingAiOverlayService : Service() {
         }
         panelView = pView
 
-        // Attach bubble initially
-        windowManager.addView(bView, bParams)
+        return try {
+            windowManager.addView(bView, bParams)
+            windowManager.addView(pView, pParams)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed adding overlay views to WindowManager", e)
+            Toast.makeText(
+                this,
+                "Gagal menampilkan jendela mengambang. Cek izin Pop-up / Jendela Mengambang di Setelan HP.",
+                Toast.LENGTH_LONG
+            ).show()
+            try {
+                if (bView.isAttachedToWindow) windowManager.removeViewImmediate(bView)
+            } catch (_: Exception) {}
+            try {
+                if (pView.isAttachedToWindow) windowManager.removeViewImmediate(pView)
+            } catch (_: Exception) {}
+            false
+        }
     }
 
     private fun triggerOrRequestLiveScreen(inChatTab: Boolean) {
@@ -376,7 +485,16 @@ class FloatingAiOverlayService : Service() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 putExtra(EXTRA_REQUEST_LIVE_SCREEN, true)
             }
-            startActivity(intent)
+            try {
+                startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed starting MainActivity for Live Screen permission", e)
+                Toast.makeText(
+                    this,
+                    "Buka Cerdas AI lalu aktifkan Live Screen (atau izinkan pop-up latar belakang di Setelan).",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
@@ -386,7 +504,16 @@ class FloatingAiOverlayService : Service() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             putExtra(EXTRA_PICK_PHOTO_FOR_TOOL, forTool)
         }
-        startActivity(intent)
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed starting MainActivity for Photo Picker", e)
+            Toast.makeText(
+                this,
+                "Buka Cerdas AI untuk memilih foto soal (atau izinkan pop-up latar belakang).",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun syncWindowVisibilityAndFlags(
@@ -394,53 +521,62 @@ class FloatingAiOverlayService : Service() {
         capturing: Boolean,
         secure: Boolean
     ) {
+        if (lastAppliedExpanded == expanded &&
+            lastAppliedCapturing == capturing &&
+            lastAppliedSecure == secure
+        ) {
+            return
+        }
+        lastAppliedExpanded = expanded
+        lastAppliedCapturing = capturing
+        lastAppliedSecure = secure
+
         val bView = bubbleView ?: return
         val pView = panelView ?: return
         val bParams = bubbleParams ?: return
         val pParams = panelParams ?: return
 
+        val showBubble = !capturing && !expanded
+        val showPanel = !capturing && expanded
+
         val baseBubbleFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            if (!showBubble) WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE else 0
         bParams.flags = if (secure) {
             baseBubbleFlags or WindowManager.LayoutParams.FLAG_SECURE
         } else {
             baseBubbleFlags
         }
 
-        val basePanelFlags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        val basePanelFlags = if (showPanel) {
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        } else {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        }
         pParams.flags = if (secure) {
             basePanelFlags or WindowManager.LayoutParams.FLAG_SECURE
         } else {
             basePanelFlags
         }
 
-        if (capturing) {
-            bView.visibility = View.GONE
-            pView.visibility = View.GONE
-            return
-        }
+        bView.visibility = if (showBubble) View.VISIBLE else View.GONE
+        pView.visibility = if (showPanel) View.VISIBLE else View.GONE
 
-        bView.visibility = View.VISIBLE
-        pView.visibility = View.VISIBLE
-
-        if (expanded) {
-            if (bView.isAttachedToWindow) {
-                try { windowManager.removeView(bView) } catch (_: Exception) {}
-            }
-            if (!pView.isAttachedToWindow) {
-                windowManager.addView(pView, pParams)
-            } else {
-                windowManager.updateViewLayout(pView, pParams)
-            }
-        } else {
-            if (pView.isAttachedToWindow) {
-                try { windowManager.removeView(pView) } catch (_: Exception) {}
-            }
-            if (!bView.isAttachedToWindow) {
-                windowManager.addView(bView, bParams)
-            } else {
+        if (bView.isAttachedToWindow) {
+            try {
                 windowManager.updateViewLayout(bView, bParams)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed updating bubble layout", e)
+            }
+        }
+        if (pView.isAttachedToWindow) {
+            try {
+                windowManager.updateViewLayout(pView, pParams)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed updating panel layout", e)
             }
         }
     }
@@ -477,13 +613,6 @@ class FloatingAiOverlayService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val resetVisibleIntent = PendingIntent.getService(
-            this,
-            12,
-            Intent(this, FloatingAiOverlayService::class.java).apply { action = ACTION_RESET_VISIBLE },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
         val scanScreenIntent = PendingIntent.getService(
             this,
             14,
@@ -499,7 +628,7 @@ class FloatingAiOverlayService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_cerdas_ai)
             .setContentTitle("Cerdas AI Mengambang Aktif")
             .setContentText("Ketuk Scan Layar atau Panel AI di atas aplikasi lain")
             .setContentIntent(openAppIntent)
@@ -515,12 +644,12 @@ class FloatingAiOverlayService : Service() {
         serviceScope.cancel()
         bubbleView?.let {
             if (it.isAttachedToWindow) {
-                try { windowManager.removeView(it) } catch (_: Exception) {}
+                try { windowManager.removeViewImmediate(it) } catch (_: Exception) {}
             }
         }
         panelView?.let {
             if (it.isAttachedToWindow) {
-                try { windowManager.removeView(it) } catch (_: Exception) {}
+                try { windowManager.removeViewImmediate(it) } catch (_: Exception) {}
             }
         }
         lifecycleOwner.onDestroy()
