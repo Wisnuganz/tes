@@ -5,10 +5,14 @@ import android.util.Log
 import com.example.model.TaskToolType
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.Content
 import com.google.firebase.ai.type.content
 import com.google.firebase.appcheck.FirebaseAppCheck
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
@@ -16,19 +20,26 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 private const val TAG = "TaskAiRepository"
-private const val MODEL_NAME = "gemini-3.8-flash"
+private const val PRIMARY_MODEL_NAME = "gemini-3.8-flash"
+private const val FALLBACK_MODEL_NAME = "gemini-3.5-flash-lite"
+
+private const val SYSTEM_PROMPT =
+    "Anda adalah Cerdas AI, asisten pintar berbahasa Indonesia untuk membantu pelajar dan mahasiswa mengerjakan tugas sekolah, PR, latihan soal, ringkasan materi, dan esai. " +
+        "Berikan jawaban yang akurat, mudah dipahami, terstruktur rapi tanpa bertele-tele."
 
 class TaskAiRepository {
 
-    private val assistantModel by lazy {
+    private val primaryModel by lazy {
         Firebase.ai.generativeModel(
-            modelName = MODEL_NAME,
-            systemInstruction = content {
-                text(
-                    "Anda adalah Cerdas AI, asisten pintar berbahasa Indonesia untuk membantu pelajar dan mahasiswa mengerjakan tugas sekolah, PR, latihan soal, ringkasan materi, dan esai. " +
-                        "Berikan jawaban yang akurat, mudah dipahami, terstruktur rapi tanpa bertele-tele."
-                )
-            }
+            modelName = PRIMARY_MODEL_NAME,
+            systemInstruction = content { text(SYSTEM_PROMPT) }
+        )
+    }
+
+    private val fallbackModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = FALLBACK_MODEL_NAME,
+            systemInstruction = content { text(SYSTEM_PROMPT) }
         )
     }
 
@@ -62,6 +73,89 @@ class TaskAiRepository {
                 "Verifikasi App Check (reCAPTCHA) timeout setelah 15 detik. Pastikan internet & Google Play Services aktif (tidak terblokir VPN/Wi-Fi), atau uji melalui Preview AI Studio.",
                 e
             )
+        }
+    }
+
+    private fun isHighDemandOrTransientError(e: Throwable): Boolean {
+        val msg = buildString {
+            var cur: Throwable? = e
+            while (cur != null) {
+                append(cur.message.orEmpty())
+                append(' ')
+                cur = cur.cause
+            }
+        }.lowercase()
+        return msg.contains("high demand") ||
+            msg.contains("overloaded") ||
+            msg.contains("try again later") ||
+            msg.contains("unavailable") ||
+            msg.contains("503") ||
+            msg.contains("429") ||
+            msg.contains("resource exhausted")
+    }
+
+    private suspend fun FlowCollector<String>.streamWithAutoFallback(requestContent: Content) {
+        var emittedFromPrimary = false
+        var shouldUseFallback = false
+
+        try {
+            withTimeout(30_000L) {
+                primaryModel.generateContentStream(requestContent).collect { chunk ->
+                    val text = chunk.text
+                    if (!text.isNullOrEmpty()) {
+                        emittedFromPrimary = true
+                        emit(text)
+                    }
+                }
+            }
+            return
+        } catch (e: TimeoutCancellationException) {
+            if (!emittedFromPrimary) {
+                Log.w(TAG, "Primary model ($PRIMARY_MODEL_NAME) timed out before first chunk, falling back to $FALLBACK_MODEL_NAME", e)
+                shouldUseFallback = true
+            } else {
+                throw e
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (!emittedFromPrimary && isHighDemandOrTransientError(e)) {
+                Log.w(TAG, "Primary model ($PRIMARY_MODEL_NAME) high demand/transient error, falling back to $FALLBACK_MODEL_NAME", e)
+                shouldUseFallback = true
+            } else {
+                throw e
+            }
+        }
+
+        if (shouldUseFallback) {
+            var emittedFromFallback = false
+            try {
+                withTimeout(45_000L) {
+                    fallbackModel.generateContentStream(requestContent).collect { chunk ->
+                        val text = chunk.text
+                        if (!text.isNullOrEmpty()) {
+                            emittedFromFallback = true
+                            emit(text)
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!emittedFromFallback && isHighDemandOrTransientError(e)) {
+                    delay(1200L)
+                    withTimeout(45_000L) {
+                        fallbackModel.generateContentStream(requestContent).collect { chunk ->
+                            val text = chunk.text
+                            if (!text.isNullOrEmpty()) {
+                                emit(text)
+                            }
+                        }
+                    }
+                } else {
+                    throw e
+                }
+            }
         }
     }
 
@@ -101,20 +195,13 @@ class TaskAiRepository {
             }
         }
 
-        withTimeout(60_000L) {
-            val requestContent = content {
-                if (scaledBitmap != null) {
-                    image(scaledBitmap)
-                }
-                text(fullPrompt)
+        val requestContent = content {
+            if (scaledBitmap != null) {
+                image(scaledBitmap)
             }
-            assistantModel.generateContentStream(requestContent).collect { chunk ->
-                val text = chunk.text
-                if (!text.isNullOrEmpty()) {
-                    emit(text)
-                }
-            }
+            text(fullPrompt)
         }
+        streamWithAutoFallback(requestContent)
     }
 
     fun streamChat(
@@ -131,20 +218,13 @@ class TaskAiRepository {
             ""
         }
 
-        withTimeout(60_000L) {
-            val requestContent = content {
-                if (scaledBitmap != null) {
-                    image(scaledBitmap)
-                }
-                text("$modeNote$prompt")
+        val requestContent = content {
+            if (scaledBitmap != null) {
+                image(scaledBitmap)
             }
-            assistantModel.generateContentStream(requestContent).collect { chunk ->
-                val text = chunk.text
-                if (!text.isNullOrEmpty()) {
-                    emit(text)
-                }
-            }
+            text("$modeNote$prompt")
         }
+        streamWithAutoFallback(requestContent)
     }
 
     private fun downscaleBitmapIfNeeded(bitmap: Bitmap, maxDimension: Int = 1600): Bitmap {
