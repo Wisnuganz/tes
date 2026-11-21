@@ -55,12 +55,14 @@ import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Summarize
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material3.Button
@@ -95,6 +97,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -142,6 +146,8 @@ fun AiAssistantOverlay(
     onCopyToast: (String) -> Unit,
     onScanScreen: () -> Unit,
     onRetryLastPrompt: (() -> Unit)? = null,
+    onSaveApiKey: ((String) -> Unit)? = null,
+    onClearApiKey: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -229,7 +235,9 @@ fun AiAssistantOverlay(
                     onCopyToast("Jawaban disalin")
                 },
                 onScanScreen = onScanScreen,
-                onRetryLastPrompt = onRetryLastPrompt
+                onRetryLastPrompt = onRetryLastPrompt,
+                onSaveApiKey = onSaveApiKey,
+                onClearApiKey = onClearApiKey
             )
         }
     }
@@ -260,7 +268,9 @@ fun AiPanelCardContent(
     onClearExternalChatBitmap: () -> Unit = {},
     onScanScreen: (() -> Unit)? = null,
     onStopSystemOverlay: (() -> Unit)? = null,
-    onRetryLastPrompt: (() -> Unit)? = null
+    onRetryLastPrompt: (() -> Unit)? = null,
+    onSaveApiKey: ((String) -> Unit)? = null,
+    onClearApiKey: (() -> Unit)? = null
 ) {
     val clipboardManager = LocalClipboardManager.current
     var chatInputText by remember { mutableStateOf("") }
@@ -487,7 +497,9 @@ fun AiPanelCardContent(
                             onToggleAntiCapture = onToggleAntiCapture,
                             onOpenTool = onOpenToolInput,
                             onScanScreen = onScanScreen,
-                            onStopGeneration = onStopGeneration
+                            onStopGeneration = onStopGeneration,
+                            onSaveApiKey = onSaveApiKey,
+                            onClearApiKey = onClearApiKey
                         )
                     }
                 } else {
@@ -496,7 +508,8 @@ fun AiPanelCardContent(
                         onQuickPrompt = { promptText -> onSendChat(promptText, null) },
                         onScanScreen = onScanScreen,
                         onCopyAnswer = onCopyText,
-                        onRetryLastPrompt = onRetryLastPrompt
+                        onRetryLastPrompt = onRetryLastPrompt,
+                        onOpenApiKeyTools = { onSelectTab(AiPanelTab.TOOLS) }
                     )
                 }
             }
@@ -691,8 +704,17 @@ private fun AiHomeworkToolsGrid(
     onToggleAntiCapture: () -> Unit,
     onOpenTool: (TaskToolType) -> Unit,
     onScanScreen: (() -> Unit)?,
-    onStopGeneration: () -> Unit
+    onStopGeneration: () -> Unit,
+    onSaveApiKey: ((String) -> Unit)? = null,
+    onClearApiKey: (() -> Unit)? = null
 ) {
+    val clipboardManager = LocalClipboardManager.current
+    var showApiKeyEditor by remember(state.hasCustomApiKey) {
+        mutableStateOf(!state.hasCustomApiKey)
+    }
+    var overlayKeyDraft by remember { mutableStateOf("") }
+    var revealOverlayKey by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -700,6 +722,219 @@ private fun AiHomeworkToolsGrid(
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        if (onSaveApiKey != null) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = if (state.hasCustomApiKey) AiEmeraldTint else AiPanelElevated,
+                border = BorderStroke(
+                    1.dp,
+                    if (state.hasCustomApiKey) AiEmerald.copy(alpha = 0.65f) else AiAmber.copy(alpha = 0.7f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(11.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showApiKeyEditor = !showApiKeyEditor },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Key,
+                                contentDescription = "Gemini API Key",
+                                tint = if (state.hasCustomApiKey) AiEmerald else AiAmber,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Gemini API Key",
+                                    color = AiTextPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = if (state.hasCustomApiKey) {
+                                        "Aktif: ${state.maskedApiKey}"
+                                    } else {
+                                        "Pasang key gratis dari aistudio.google.com/apikey"
+                                    },
+                                    color = AiTextSecondary,
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (state.hasCustomApiKey) AiEmerald else AiCardDark
+                        ) {
+                            Text(
+                                text = if (state.hasCustomApiKey) "AKTIF" else "ATUR",
+                                color = if (state.hasCustomApiKey) Color.White else AiAmber,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    if (showApiKeyEditor) {
+                        OutlinedTextField(
+                            value = overlayKeyDraft,
+                            onValueChange = { overlayKeyDraft = it },
+                            singleLine = true,
+                            placeholder = {
+                                Text(
+                                    text = if (state.hasCustomApiKey) {
+                                        "Key tersimpan (${state.maskedApiKey})"
+                                    } else {
+                                        "Tempel AIza... di sini"
+                                    },
+                                    color = AiTextSecondary,
+                                    fontSize = 11.sp
+                                )
+                            },
+                            visualTransformation = if (revealOverlayKey) {
+                                VisualTransformation.None
+                            } else {
+                                PasswordVisualTransformation()
+                            },
+                            trailingIcon = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(
+                                        onClick = { revealOverlayKey = !revealOverlayKey },
+                                        modifier = Modifier.size(34.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (revealOverlayKey) {
+                                                Icons.Default.VisibilityOff
+                                            } else {
+                                                Icons.Default.Visibility
+                                            },
+                                            contentDescription = "Tampilkan atau sembunyikan key",
+                                            tint = AiTextSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            val clip = clipboardManager.getText()?.text?.trim().orEmpty()
+                                            if (clip.isNotBlank()) {
+                                                overlayKeyDraft = clip
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .size(34.dp)
+                                            .testTag("overlay_paste_api_key_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ContentPaste,
+                                            contentDescription = "Tempel API Key",
+                                            tint = AiEmerald,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = AiEmerald,
+                                unfocusedBorderColor = AiCardBorder,
+                                focusedTextColor = AiTextPrimary,
+                                unfocusedTextColor = AiTextPrimary,
+                                focusedContainerColor = AiCardDark,
+                                unfocusedContainerColor = AiCardDark
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("overlay_api_key_input")
+                        )
+
+                        if (!state.apiKeyStatusMessage.isNullOrBlank()) {
+                            Text(
+                                text = state.apiKeyStatusMessage,
+                                color = if (state.apiKeyStatusMessage.startsWith("Gagal")) {
+                                    Color(0xFFFCA5A5)
+                                } else {
+                                    AiEmerald
+                                },
+                                fontSize = 11.sp
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    onSaveApiKey(overlayKeyDraft)
+                                    overlayKeyDraft = ""
+                                },
+                                enabled = !state.isTestingApiKey && overlayKeyDraft.isNotBlank(),
+                                shape = RoundedCornerShape(9.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = AiEmerald),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .testTag("overlay_save_api_key_button")
+                            ) {
+                                if (state.isTestingApiKey) {
+                                    CircularProgressIndicator(
+                                        color = Color.White,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Tes & Simpan",
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            if (state.hasCustomApiKey && onClearApiKey != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(9.dp),
+                                    color = AiStopRedTint,
+                                    border = BorderStroke(1.dp, AiStopRed.copy(alpha = 0.6f)),
+                                    modifier = Modifier
+                                        .height(40.dp)
+                                        .clickable(onClick = onClearApiKey)
+                                        .testTag("overlay_clear_api_key_button")
+                                ) {
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier.padding(horizontal = 12.dp)
+                                    ) {
+                                        Text(
+                                            text = "Hapus",
+                                            color = Color(0xFFFCA5A5),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if (onScanScreen != null) {
             Surface(
                 shape = RoundedCornerShape(14.dp),
@@ -1455,7 +1690,8 @@ private fun AiChatTabContent(
     onQuickPrompt: (String) -> Unit,
     onScanScreen: (() -> Unit)?,
     onCopyAnswer: (String) -> Unit,
-    onRetryLastPrompt: (() -> Unit)? = null
+    onRetryLastPrompt: (() -> Unit)? = null,
+    onOpenApiKeyTools: (() -> Unit)? = null
 ) {
     val chatListState = rememberLazyListState()
     LaunchedEffect(state.chatMessages.size, state.chatMessages.lastOrNull()?.text?.length) {
@@ -1520,10 +1756,14 @@ private fun AiChatTabContent(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             items(state.chatMessages, key = { it.id }) { msg ->
+                val isAppCheckError = msg.isError && !state.hasCustomApiKey &&
+                    (msg.text.contains("App Check", ignoreCase = true) ||
+                        msg.text.contains("API Key", ignoreCase = true))
                 ChatBubbleItem(
                     message = msg,
                     onCopy = { onCopyAnswer(msg.text) },
-                    onRetry = if (msg.id == lastErrorId) onRetryLastPrompt else null
+                    onRetry = if (msg.id == lastErrorId) onRetryLastPrompt else null,
+                    onOpenApiKeyTools = if (msg.id == lastErrorId && isAppCheckError) onOpenApiKeyTools else null
                 )
             }
         }
@@ -1555,7 +1795,8 @@ private fun QuickPromptChip(
 private fun ChatBubbleItem(
     message: AiChatMessage,
     onCopy: () -> Unit,
-    onRetry: (() -> Unit)? = null
+    onRetry: (() -> Unit)? = null,
+    onOpenApiKeyTools: (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1643,33 +1884,70 @@ private fun ChatBubbleItem(
                     }
                 }
 
-                if (message.isError && onRetry != null) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = AiStopRed.copy(alpha = 0.22f),
-                        border = BorderStroke(1.dp, AiStopRed.copy(alpha = 0.55f)),
-                        modifier = Modifier
-                            .padding(top = 2.dp)
-                            .clickable(onClick = onRetry)
-                            .testTag("chat_retry_button")
+                if (message.isError && (onRetry != null || onOpenApiKeyTools != null)) {
+                    Row(
+                        modifier = Modifier.padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Coba Lagi",
-                                tint = Color(0xFFFEE2E2),
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Text(
-                                text = "Coba Lagi",
-                                color = Color(0xFFFEE2E2),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
+                        if (onRetry != null) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = AiStopRed.copy(alpha = 0.22f),
+                                border = BorderStroke(1.dp, AiStopRed.copy(alpha = 0.55f)),
+                                modifier = Modifier
+                                    .clickable(onClick = onRetry)
+                                    .testTag("chat_retry_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Coba Lagi",
+                                        tint = Color(0xFFFEE2E2),
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = "Coba Lagi",
+                                        color = Color(0xFFFEE2E2),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        if (onOpenApiKeyTools != null) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = AiEmeraldTint,
+                                border = BorderStroke(1.dp, AiEmerald.copy(alpha = 0.65f)),
+                                modifier = Modifier
+                                    .clickable(onClick = onOpenApiKeyTools)
+                                    .testTag("chat_open_api_key_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Key,
+                                        contentDescription = "Atur API Key",
+                                        tint = AiEmerald,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = "Atur API Key",
+                                        color = AiEmerald,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
                 }

@@ -110,5 +110,9 @@ data class TaskAssistantUiState(
     val toastMessage: String? = null,
     val solvedTasks: List<SolvedTaskItem> = emptyList(),
     val chatMessages: List<AiChatMessage> = emptyList(),
-    val scratchpadText: String = ""
+    val scratchpadText: String = "",
+    val hasCustomApiKey: Boolean = false,
+    val maskedApiKey: String = "",
+    val apiKeyStatusMessage: String? = null,
+    val isTestingApiKey: Boolean = false
 )

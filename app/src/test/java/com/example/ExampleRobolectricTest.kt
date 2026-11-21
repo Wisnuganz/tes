@@ -3,9 +3,12 @@ package com.example
 import android.content.Context
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
+import com.example.ai.GeminiApiKeyStore
 import com.example.overlay.FloatingAiOverlayService
 import com.example.session.AiAssistantSession
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -53,5 +56,26 @@ class ExampleRobolectricTest {
         controller.create().startCommand(0, 0).get()
         assertEquals(false, AiAssistantSession.uiState.value.isOverlayServiceRunning)
         controller.destroy()
+    }
+
+    @Test
+    fun `gemini api key store saves masks and clears cleanly`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        GeminiApiKeyStore.clearApiKey(context)
+
+        assertEquals("", GeminiApiKeyStore.getApiKey(context))
+        assertEquals("AIzaSy••••3456", GeminiApiKeyStore.maskKey("AIzaSyTestKeyExample123456"))
+
+        GeminiApiKeyStore.saveApiKey(context, "  AIzaSyTestKeyExample123456  ", "gemini-3.5-flash-lite")
+        AiAssistantSession.init(context)
+
+        assertEquals("AIzaSyTestKeyExample123456", GeminiApiKeyStore.getApiKey(context))
+        assertEquals("gemini-3.5-flash-lite", GeminiApiKeyStore.getVerifiedModel(context))
+        assertTrue(AiAssistantSession.uiState.value.hasCustomApiKey)
+        assertEquals("AIzaSy••••3456", AiAssistantSession.uiState.value.maskedApiKey)
+
+        AiAssistantSession.clearApiKey(context)
+        assertFalse(AiAssistantSession.uiState.value.hasCustomApiKey)
+        assertEquals("", GeminiApiKeyStore.getApiKey(context))
     }
 }

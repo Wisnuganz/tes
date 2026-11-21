@@ -27,6 +27,8 @@ private const val SYSTEM_PROMPT =
 
 class TaskAiRepository {
 
+    private val directClient = DirectGeminiRestClient()
+
     @Volatile
     private var preferFastModelUntilMs: Long = 0L
 
@@ -44,6 +46,8 @@ class TaskAiRepository {
         )
     }
 
+    suspend fun verifyApiKey(apiKey: String): Result<String> = directClient.verifyAndSelectModel(apiKey)
+
     private fun mapFriendlyAiException(e: Throwable): Throwable {
         val fullMsg = buildString {
             var cur: Throwable? = e
@@ -55,12 +59,18 @@ class TaskAiRepository {
         }
         val lower = fullMsg.lowercase()
         return when {
-            lower.contains("too many attempts") -> IllegalStateException(
-                "Batas percobaan App Check tercapai (Too many attempts). Tunggu 1–2 menit lalu buka aplikasi Cerdas AI sebentar sebelum mengirim lagi.",
+            lower.contains("api key not valid") || lower.contains("api_key_invalid") -> IllegalStateException(
+                "Gemini API Key tidak valid. Periksa atau tempel ulang API Key dari aistudio.google.com/apikey.",
                 e
             )
-            lower.contains("app attestation failed") || (lower.contains("403") && lower.contains("app check")) -> IllegalStateException(
-                "Verifikasi App Check (reCAPTCHA) ditolak (403). Buka aplikasi Cerdas AI di layar depan sebentar (pastikan Wi-Fi/internet aktif & tidak diblokir VPN/DNS), lalu coba lagi.",
+            lower.contains("too many attempts") -> IllegalStateException(
+                "Batas percobaan App Check tercapai. Tempel Gemini API Key di halaman utama agar tidak terkena batas App Check, atau tunggu 1–2 menit.",
+                e
+            )
+            lower.contains("app attestation failed") ||
+                lower.contains("app check token is invalid") ||
+                (lower.contains("403") && lower.contains("app check")) -> IllegalStateException(
+                "App Check HP ini ditolak. Masukkan Gemini API Key di kolom 'Koneksi Gemini API Key' agar AI langsung aktif tanpa App Check.",
                 e
             )
             else -> e
@@ -228,11 +238,26 @@ class TaskAiRepository {
             }
             text(fullPrompt)
         }
+        val customApiKey = GeminiApiKeyStore.getApiKey()
         try {
-            streamWithAutoFallback(
-                requestContent = requestContent,
-                preferFast = quickAnswerMode
-            )
+            if (customApiKey.isNotBlank()) {
+                withTimeout(50_000L) {
+                    directClient.streamGenerateContent(
+                        apiKey = customApiKey,
+                        systemPrompt = SYSTEM_PROMPT,
+                        userPrompt = fullPrompt,
+                        attachedBitmap = scaledBitmap,
+                        priorMessages = emptyList(),
+                        preferFast = quickAnswerMode,
+                        verifiedHintModel = GeminiApiKeyStore.getVerifiedModel()
+                    ).collect { emit(it) }
+                }
+            } else {
+                streamWithAutoFallback(
+                    requestContent = requestContent,
+                    preferFast = quickAnswerMode
+                )
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -253,27 +278,42 @@ class TaskAiRepository {
             ""
         }
 
-        val historyContent = priorMessages
-            .filter { !it.isError && !it.isStreaming && it.id != "welcome" && it.text.isNotBlank() }
-            .takeLast(8)
-            .map { msg ->
-                content(role = if (msg.isUser) "user" else "model") {
-                    text(msg.text)
-                }
-            }
-
-        val requestContent = content(role = "user") {
-            if (scaledBitmap != null) {
-                image(scaledBitmap)
-            }
-            text("$modeNote$prompt")
-        }
+        val customApiKey = GeminiApiKeyStore.getApiKey()
         try {
-            streamWithAutoFallback(
-                requestContent = requestContent,
-                chatHistory = historyContent,
-                preferFast = quickAnswerMode
-            )
+            if (customApiKey.isNotBlank()) {
+                withTimeout(50_000L) {
+                    directClient.streamGenerateContent(
+                        apiKey = customApiKey,
+                        systemPrompt = SYSTEM_PROMPT,
+                        userPrompt = "$modeNote$prompt",
+                        attachedBitmap = scaledBitmap,
+                        priorMessages = priorMessages,
+                        preferFast = quickAnswerMode,
+                        verifiedHintModel = GeminiApiKeyStore.getVerifiedModel()
+                    ).collect { emit(it) }
+                }
+            } else {
+                val historyContent = priorMessages
+                    .filter { !it.isError && !it.isStreaming && it.id != "welcome" && it.text.isNotBlank() }
+                    .takeLast(8)
+                    .map { msg ->
+                        content(role = if (msg.isUser) "user" else "model") {
+                            text(msg.text)
+                        }
+                    }
+
+                val requestContent = content(role = "user") {
+                    if (scaledBitmap != null) {
+                        image(scaledBitmap)
+                    }
+                    text("$modeNote$prompt")
+                }
+                streamWithAutoFallback(
+                    requestContent = requestContent,
+                    chatHistory = historyContent,
+                    preferFast = quickAnswerMode
+                )
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

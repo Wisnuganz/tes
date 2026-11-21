@@ -1,5 +1,6 @@
 package com.example.viewmodel
 
+import android.content.Context
 import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import com.example.model.AiPanelTab
@@ -12,6 +13,11 @@ import kotlinx.coroutines.flow.StateFlow
 class TaskAssistantViewModel : ViewModel() {
 
     val uiState: StateFlow<TaskAssistantUiState> = AiAssistantSession.uiState
+
+    fun saveAndTestApiKey(context: Context, rawKey: String) =
+        AiAssistantSession.saveAndTestApiKey(context, rawKey)
+
+    fun clearApiKey(context: Context) = AiAssistantSession.clearApiKey(context)
 
     fun setOverlayPermission(granted: Boolean) = AiAssistantSession.setOverlayPermission(granted)
 

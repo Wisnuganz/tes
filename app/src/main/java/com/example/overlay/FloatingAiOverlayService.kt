@@ -183,6 +183,7 @@ class FloatingAiOverlayService : Service() {
         if (FirebaseApp.getApps(this).isEmpty()) {
             configureAppCheck(this, null)
         }
+        AiAssistantSession.init(this)
 
         lifecycleOwner.onCreate()
 
@@ -444,7 +445,13 @@ class FloatingAiOverlayService : Service() {
                                 stopForeground(STOP_FOREGROUND_REMOVE)
                                 stopSelf()
                             },
-                            onRetryLastPrompt = AiAssistantSession::retryLastUserPrompt
+                            onRetryLastPrompt = AiAssistantSession::retryLastUserPrompt,
+                            onSaveApiKey = { key ->
+                                AiAssistantSession.saveAndTestApiKey(this@FloatingAiOverlayService, key)
+                            },
+                            onClearApiKey = {
+                                AiAssistantSession.clearApiKey(this@FloatingAiOverlayService)
+                            }
                         )
                     }
                 }

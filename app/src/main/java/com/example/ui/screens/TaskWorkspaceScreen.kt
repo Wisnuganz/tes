@@ -39,13 +39,16 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FitScreen
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +59,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,6 +74,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -108,10 +117,14 @@ fun TaskWorkspaceScreen(
     onSolveDirectChat: (String) -> Unit,
     onDeleteTask: (String) -> Unit,
     onCopySuccess: (String) -> Unit,
+    onSaveApiKey: (String) -> Unit,
+    onClearApiKey: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    var apiKeyDraft by remember { mutableStateOf("") }
+    var revealApiKey by remember { mutableStateOf(false) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -226,6 +239,209 @@ fun TaskWorkspaceScreen(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                // Gemini API Key (BYOK) Card
+                item(key = "gemini_api_key_card") {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = CbtCardWhite),
+                        border = BorderStroke(
+                            1.dp,
+                            if (state.hasCustomApiKey) AiEmerald.copy(alpha = 0.6f) else CbtCardBorder
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (state.hasCustomApiKey) AiEmeraldLightBg else CbtBlueLightBg,
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.Key,
+                                                contentDescription = "Gemini API Key",
+                                                tint = if (state.hasCustomApiKey) AiEmerald else CbtRoyalBlue,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                    Column {
+                                        Text(
+                                            text = "Koneksi Gemini API Key",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = CbtTextPrimary
+                                        )
+                                        Text(
+                                            text = if (state.hasCustomApiKey) {
+                                                "Tersimpan: ${state.maskedApiKey}"
+                                            } else {
+                                                "Ambil key gratis di aistudio.google.com/apikey"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = CbtTextSecondary
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(50),
+                                    color = if (state.hasCustomApiKey) AiEmeraldLightBg else CbtDangerLightBg
+                                ) {
+                                    Text(
+                                        text = if (state.hasCustomApiKey) "AKTIF" else "PERLU KEY",
+                                        color = if (state.hasCustomApiKey) AiEmerald else CbtDangerRed,
+                                        fontFamily = JetBrainsMonoFontFamily,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = apiKeyDraft,
+                                onValueChange = { apiKeyDraft = it },
+                                singleLine = true,
+                                visualTransformation = if (revealApiKey) {
+                                    VisualTransformation.None
+                                } else {
+                                    PasswordVisualTransformation()
+                                },
+                                placeholder = {
+                                    Text(
+                                        text = if (state.hasCustomApiKey) {
+                                            "Tempel key baru untuk mengganti..."
+                                        } else {
+                                            "Tempel API Key (AIza...) di sini"
+                                        },
+                                        color = CbtTextSecondary,
+                                        fontSize = 13.sp
+                                    )
+                                },
+                                trailingIcon = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(onClick = { revealApiKey = !revealApiKey }) {
+                                            Icon(
+                                                imageVector = if (revealApiKey) {
+                                                    Icons.Outlined.VisibilityOff
+                                                } else {
+                                                    Icons.Outlined.Visibility
+                                                },
+                                                contentDescription = "Tampilkan atau sembunyikan API Key",
+                                                tint = CbtTextSecondary
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                val clip = clipboardManager.getText()?.text?.trim().orEmpty()
+                                                if (clip.isNotBlank()) {
+                                                    apiKeyDraft = clip
+                                                    onCopySuccess("API Key ditempel")
+                                                }
+                                            },
+                                            modifier = Modifier.testTag("paste_api_key_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.ContentPaste,
+                                                contentDescription = "Tempel API Key",
+                                                tint = AiEmerald
+                                            )
+                                        }
+                                    }
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = AiEmerald,
+                                    unfocusedBorderColor = CbtCardBorder,
+                                    focusedTextColor = CbtTextPrimary,
+                                    unfocusedTextColor = CbtTextPrimary
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("api_key_input")
+                            )
+
+                            if (!state.apiKeyStatusMessage.isNullOrBlank()) {
+                                Text(
+                                    text = state.apiKeyStatusMessage,
+                                    fontSize = 12.sp,
+                                    color = if (state.apiKeyStatusMessage.startsWith("Gagal")) {
+                                        CbtDangerRed
+                                    } else {
+                                        AiEmerald
+                                    },
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        onSaveApiKey(apiKeyDraft)
+                                    },
+                                    enabled = !state.isTestingApiKey && apiKeyDraft.isNotBlank(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = AiEmerald),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(46.dp)
+                                        .testTag("save_test_api_key_button")
+                                ) {
+                                    if (state.isTestingApiKey) {
+                                        CircularProgressIndicator(
+                                            color = Color.White,
+                                            strokeWidth = 2.dp,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "Simpan & Tes Key",
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                if (state.hasCustomApiKey) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            apiKeyDraft = ""
+                                            onClearApiKey()
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        border = BorderStroke(1.dp, CbtDangerRed.copy(alpha = 0.5f)),
+                                        modifier = Modifier
+                                            .height(46.dp)
+                                            .testTag("clear_api_key_button")
+                                    ) {
+                                        Text(
+                                            text = "Hapus",
+                                            color = CbtDangerRed,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // System Floating Overlay & Stealth Control Card
                 item(key = "overlay_control_card") {
                     Card(

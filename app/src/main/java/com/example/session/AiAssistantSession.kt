@@ -1,7 +1,9 @@
 package com.example.session
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import com.example.ai.GeminiApiKeyStore
 import com.example.ai.TaskAiRepository
 import com.example.model.AiChatMessage
 import com.example.model.AiPanelTab
@@ -50,6 +52,77 @@ object AiAssistantSession {
 
     private var activeStreamJob: Job? = null
     private var toastJob: Job? = null
+
+    fun init(context: Context) {
+        GeminiApiKeyStore.init(context)
+        val savedKey = GeminiApiKeyStore.getApiKey(context)
+        val hasKey = savedKey.isNotBlank()
+        _uiState.update {
+            it.copy(
+                hasCustomApiKey = hasKey,
+                maskedApiKey = GeminiApiKeyStore.maskKey(savedKey),
+                apiKeyStatusMessage = if (hasKey) {
+                    val modelHint = GeminiApiKeyStore.getVerifiedModel(context)
+                    if (modelHint.isNotBlank()) "API Key aktif ($modelHint)" else "API Key tersimpan • Siap dipakai"
+                } else {
+                    null
+                },
+                aiStatusText = if (hasKey) "Siap • Gemini API Key" else "Siap • Tugas AI Engine"
+            )
+        }
+    }
+
+    fun saveAndTestApiKey(context: Context, rawKey: String) {
+        val cleanKey = rawKey.trim()
+        if (cleanKey.isBlank()) {
+            _uiState.update {
+                it.copy(apiKeyStatusMessage = "Tempel Gemini API Key terlebih dahulu.")
+            }
+            return
+        }
+        scope.launch {
+            _uiState.update {
+                it.copy(
+                    isTestingApiKey = true,
+                    apiKeyStatusMessage = "Menguji koneksi API Key ke Gemini..."
+                )
+            }
+            val result = aiRepository.verifyApiKey(cleanKey)
+            result.onSuccess { modelName ->
+                GeminiApiKeyStore.saveApiKey(context, cleanKey, modelName)
+                _uiState.update {
+                    it.copy(
+                        isTestingApiKey = false,
+                        hasCustomApiKey = true,
+                        maskedApiKey = GeminiApiKeyStore.maskKey(cleanKey),
+                        apiKeyStatusMessage = "Berhasil terhubung! ($modelName)",
+                        aiStatusText = "Siap • Gemini API Key"
+                    )
+                }
+                showToast("Gemini API Key aktif!")
+            }.onFailure { err ->
+                _uiState.update {
+                    it.copy(
+                        isTestingApiKey = false,
+                        apiKeyStatusMessage = "Gagal: ${err.localizedMessage ?: "Periksa API Key & internet."}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearApiKey(context: Context) {
+        GeminiApiKeyStore.clearApiKey(context)
+        _uiState.update {
+            it.copy(
+                hasCustomApiKey = false,
+                maskedApiKey = "",
+                apiKeyStatusMessage = "API Key dihapus (kembali ke Firebase App Check).",
+                aiStatusText = "Siap • Tugas AI Engine"
+            )
+        }
+        showToast("API Key dihapus")
+    }
 
     fun setOverlayPermission(granted: Boolean) {
         _uiState.update { it.copy(hasOverlayPermission = granted) }

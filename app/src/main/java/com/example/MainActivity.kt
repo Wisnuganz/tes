@@ -55,8 +55,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // STEP 1: Configure App Check with launch intent before any UI, ViewModels, or Firebase ops.
+        // STEP 1: Configure App Check with launch intent and restore saved BYOK API key before any UI or AI ops.
         configureAppCheck(this, intent)
+        AiAssistantSession.init(this)
 
         handleOverlayIntent(intent)
 
@@ -250,7 +251,9 @@ fun TaskAssistantApp(
             onOpenToolWithInput = viewModel::openToolInput,
             onSolveDirectChat = { prompt -> viewModel.sendChatMessage(prompt, null) },
             onDeleteTask = viewModel::deleteSolvedTask,
-            onCopySuccess = viewModel::showToast
+            onCopySuccess = viewModel::showToast,
+            onSaveApiKey = { key -> viewModel.saveAndTestApiKey(context, key) },
+            onClearApiKey = { viewModel.clearApiKey(context) }
         )
 
         DraggableFloatingAiBubble(
@@ -288,7 +291,9 @@ fun TaskAssistantApp(
                     requestLiveScreenCapture()
                 }
             },
-            onRetryLastPrompt = viewModel::retryLastUserPrompt
+            onRetryLastPrompt = viewModel::retryLastUserPrompt,
+            onSaveApiKey = { key -> viewModel.saveAndTestApiKey(context, key) },
+            onClearApiKey = { viewModel.clearApiKey(context) }
         )
     }
 }
