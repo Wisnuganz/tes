@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.firebase.configureAppCheck
+import com.example.firebase.warmUpAppCheckTokenIfNeeded
 import com.example.model.AiPanelTab
 import com.example.model.StealthMode
 import com.example.model.TaskToolType
@@ -174,6 +175,10 @@ fun TaskAssistantApp(
             onConsumeLiveScreenRequest()
             requestLiveScreenCapture()
         }
+    }
+
+    LaunchedEffect(Unit) {
+        warmUpAppCheckTokenIfNeeded()
     }
 
     LaunchedEffect(state.isAntiCaptureEnabled, state.stealthMode) {

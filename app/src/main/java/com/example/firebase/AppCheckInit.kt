@@ -24,6 +24,14 @@ private const val FALLBACK_GCM_SENDER_ID = "1089453676878"
 private const val FALLBACK_STORAGE_BUCKET = "gen-lang-client-0354368628.firebasestorage.app"
 private const val FALLBACK_RECAPTCHA_SITE_KEY = "6LfwkSkuAAAAAI57Xe0-RwyNQzH9PvRArOFMW3JB"
 
+private val initLock = Any()
+
+@Volatile
+private var isProviderInstalled = false
+
+@Volatile
+private var isTokenWarmupAttempted = false
+
 fun ensureFirebaseAppInitialized(context: Context): Boolean {
     val appContext = context.applicationContext ?: context
     if (FirebaseApp.getApps(appContext).isNotEmpty()) {
@@ -49,55 +57,76 @@ fun ensureFirebaseAppInitialized(context: Context): Boolean {
 }
 
 fun configureAppCheck(context: Context, intent: Intent?) {
-    try {
-        ensureFirebaseAppInitialized(context)
+    synchronized(initLock) {
+        try {
+            ensureFirebaseAppInitialized(context)
 
-        if (BuildConfig.DEBUG) {
-            val debugToken = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)
+            if (BuildConfig.DEBUG) {
+                val debugToken = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)
 
-            if (!debugToken.isNullOrEmpty()) {
-                val persistenceKey = FirebaseApp.getInstance().persistenceKey
-                val prefs = context.getSharedPreferences(
-                    "$DEBUG_STORE_PREFIX$persistenceKey",
-                    Context.MODE_PRIVATE
-                )
-                // Must use commit() synchronously before installing DebugAppCheckProviderFactory.
-                prefs.edit()
-                    .putString(DEBUG_SECRET_KEY, debugToken)
-                    .commit()
-                Log.d(TAG, "App Check debug secret configured successfully.")
+                if (!debugToken.isNullOrEmpty()) {
+                    val persistenceKey = FirebaseApp.getInstance().persistenceKey
+                    val prefs = context.getSharedPreferences(
+                        "$DEBUG_STORE_PREFIX$persistenceKey",
+                        Context.MODE_PRIVATE
+                    )
+                    // Must use commit() synchronously before installing DebugAppCheckProviderFactory.
+                    prefs.edit()
+                        .putString(DEBUG_SECRET_KEY, debugToken)
+                        .commit()
+                    Log.d(TAG, "App Check debug secret configured successfully.")
+                } else if (!isProviderInstalled) {
+                    Log.w(TAG, "No debug token found in Intent extra.")
+                }
+
+                if (!isProviderInstalled) {
+                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                        DebugAppCheckProviderFactory.getInstance()
+                    )
+                    isProviderInstalled = true
+                    Log.d(TAG, "DebugAppCheckProviderFactory installed.")
+                }
             } else {
-                Log.w(TAG, "No debug token found in Intent extra.")
-            }
+                if (isProviderInstalled) {
+                    return
+                }
 
-            FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                DebugAppCheckProviderFactory.getInstance()
-            )
-            Log.d(TAG, "DebugAppCheckProviderFactory installed.")
-            FirebaseAppCheck.getInstance().getAppCheckToken(false)
-        } else {
-            val resId = context.resources.getIdentifier(
-                RECAPTCHA_SITE_KEY_RES,
-                "string",
-                context.packageName
-            )
-            val resourceSiteKey = if (resId != 0) context.getString(resId) else ""
-            val siteKey = resourceSiteKey.ifBlank { FALLBACK_RECAPTCHA_SITE_KEY }
-
-            if (siteKey.isNotBlank()) {
-                FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
-                    RecaptchaAppCheckProviderFactory.getInstance(siteKey)
+                val resId = context.resources.getIdentifier(
+                    RECAPTCHA_SITE_KEY_RES,
+                    "string",
+                    context.packageName
                 )
-                Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
-                FirebaseAppCheck.getInstance().getAppCheckToken(false)
-                    .addOnFailureListener { err ->
-                        Log.w(TAG, "Pre-warm App Check token failed", err)
-                    }
-            } else {
-                Log.e(TAG, "recaptcha_site_key is blank and no fallback site key is available.")
+                val resourceSiteKey = if (resId != 0) context.getString(resId) else ""
+                val siteKey = resourceSiteKey.ifBlank { FALLBACK_RECAPTCHA_SITE_KEY }
+
+                if (siteKey.isNotBlank()) {
+                    FirebaseAppCheck.getInstance().installAppCheckProviderFactory(
+                        RecaptchaAppCheckProviderFactory.getInstance(siteKey)
+                    )
+                    isProviderInstalled = true
+                    Log.d(TAG, "RecaptchaAppCheckProviderFactory installed.")
+                } else {
+                    Log.e(TAG, "recaptcha_site_key is blank and no fallback site key is available.")
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize Firebase App Check", e)
         }
+    }
+}
+
+fun warmUpAppCheckTokenIfNeeded() {
+    if (!isProviderInstalled || isTokenWarmupAttempted) return
+    isTokenWarmupAttempted = true
+    try {
+        FirebaseAppCheck.getInstance().getAppCheckToken(false)
+            .addOnSuccessListener { token ->
+                Log.d(TAG, "App Check token cached in foreground (len=${token.token.length})")
+            }
+            .addOnFailureListener { err ->
+                Log.w(TAG, "Foreground App Check warm-up failed: ${err.localizedMessage}")
+            }
     } catch (e: Exception) {
-        Log.e(TAG, "Failed to initialize Firebase App Check", e)
+        Log.w(TAG, "Failed to warm up App Check token", e)
     }
 }
