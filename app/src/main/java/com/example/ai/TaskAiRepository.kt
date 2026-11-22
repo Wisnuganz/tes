@@ -337,7 +337,7 @@ class TaskAiRepository {
         attachedBitmap: Bitmap?,
         preferNaturalMissForKkm: Boolean
     ): AutoAnswerDecision {
-        val scaledBitmap = attachedBitmap?.let { downscaleBitmapIfNeeded(it, maxDimension = 1280) }
+        val scaledBitmap = attachedBitmap?.let { downscaleBitmapIfNeeded(it, maxDimension = 1024) }
         val kkmInstruction = if (preferNaturalMissForKkm) {
             "PERHATIAN MODE KKM NATURAL (~80%): Untuk soal INI saja, pilih satu opsi pengecoh yang cukup masuk akal (BUKAN opsi yang benar) agar skor tetap terlihat natural ~80%. Jelaskan singkat di 'reason' bahwa ini penyesuaian KKM."
         } else {
@@ -345,7 +345,7 @@ class TaskAiRepository {
         }
 
         val prompt = buildString {
-            appendLine("Baca soal yang sedang tampil di layar aplikasi kuis/ujian ini.")
+            appendLine("Baca soal yang sedang tampil di layar aplikasi kuis/ujian ini (seperti Quizizz, Google Form, Exam App, atau Web Quiz).")
             appendLine(kkmInstruction)
             if (screenText.isNotBlank()) {
                 appendLine("\nTeks yang terbaca di layar:")
@@ -360,17 +360,21 @@ class TaskAiRepository {
                 
                 Kembalikan HANYA JSON valid dengan format persis berikut:
                 {
+                  "hasActiveQuestion": true,
                   "questionNumber": "Soal No. 1",
                   "questionSummary": "Ringkasan singkat isi soal",
                   "answerLetter": "B",
-                  "answerText": "Teks pilihan yang dipilih",
+                  "answerText": "Teks pilihan yang dipilih persis seperti di layar",
                   "reason": "Penjelasan singkat mengapa jawaban ini benar (1-2 kalimat)",
                   "answerTapXRatio": 0.5,
                   "answerTapYRatio": 0.45,
                   "nextTapXRatio": 0.72,
                   "nextTapYRatio": 0.85
                 }
-                Catatan: isi answerLetter hanya 1 huruf kapital A/B/C/D/E jika ada pilihan huruf, dan isi answerTapXRatio/answerTapYRatio dengan estimasi titik tengah opsi terpilih (0.0-1.0) serta nextTapXRatio/nextTapYRatio untuk tombol Soal Selanjutnya/Berikutnya (atau null jika tidak terlihat).
+                Catatan:
+                1. Jika layar sedang transisi/tunggu/leaderboard/'Correct/Incorrect'/loading tanpa soal aktif & opsi jawaban, isi "hasActiveQuestion": false, "answerLetter": "", dan "answerTapXRatio": null.
+                2. Jika ada huruf opsi A/B/C/D/E, isi answerLetter 1 huruf kapital. Jika soal Quizizz/kartu warna tanpa huruf A-E, isi answerLetter "" lalu salin persis teks opsi ke answerText DAN isi answerTapXRatio/answerTapYRatio tepat di tengah kartu jawaban pada gambar layar.
+                3. Isi nextTapXRatio/nextTapYRatio untuk tombol Selanjutnya/Next/Berikutnya, atau null jika tombol lanjut tidak ada di layar.
                 """.trimIndent()
             )
         }
@@ -428,6 +432,7 @@ class TaskAiRepository {
         }
 
         val obj = JSONObject(jsonSlice)
+        val hasActive = obj.optBoolean("hasActiveQuestion", true)
         val letter = obj.optString("answerLetter", "")
             .trim()
             .uppercase()
@@ -447,6 +452,7 @@ class TaskAiRepository {
             answerLetter = letter,
             answerText = obj.optString("answerText", "").trim(),
             reason = obj.optString("reason", "").trim(),
+            hasActiveQuestion = hasActive,
             answerTapXRatio = optFloat("answerTapXRatio"),
             answerTapYRatio = optFloat("answerTapYRatio"),
             nextTapXRatio = optFloat("nextTapXRatio"),

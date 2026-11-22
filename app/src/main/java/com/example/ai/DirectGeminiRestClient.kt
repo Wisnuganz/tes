@@ -137,7 +137,7 @@ class DirectGeminiRestClient {
         jsonResponse: Boolean = true,
         verifiedHintModel: String = "",
         disableThinking: Boolean = true,
-        maxOutputTokens: Int? = 320
+        maxOutputTokens: Int? = 768
     ): String = withContext(Dispatchers.IO) {
         val cleanKey = apiKey.trim()
         val candidates = buildModelCandidates(preferFast = true, verifiedHintModel = verifiedHintModel)
@@ -173,7 +173,7 @@ class DirectGeminiRestClient {
                     callSingleModel(cleanKey, modelName, payload)
                 } catch (e: Exception) {
                     val m = e.message.orEmpty().lowercase()
-                    if (disableThinking && m.contains("http 400") && m.contains("thinking")) {
+                    if (disableThinking && m.contains("http 400")) {
                         callSingleModel(cleanKey, modelName, payloadNoThinking)
                     } else {
                         throw e
@@ -202,7 +202,7 @@ class DirectGeminiRestClient {
             callSingleModel(cleanKey, discovered, payload)
         } catch (e: Exception) {
             val m = e.message.orEmpty().lowercase()
-            if (disableThinking && m.contains("http 400") && m.contains("thinking")) {
+            if (disableThinking && m.contains("http 400")) {
                 callSingleModel(cleanKey, discovered, payloadNoThinking)
             } else {
                 throw e

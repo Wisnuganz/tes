@@ -109,6 +109,7 @@ data class AutoAnswerDecision(
     val answerLetter: String,
     val answerText: String,
     val reason: String,
+    val hasActiveQuestion: Boolean = true,
     val answerTapXRatio: Float? = null,
     val answerTapYRatio: Float? = null,
     val nextTapXRatio: Float? = null,

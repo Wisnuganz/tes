@@ -248,6 +248,7 @@ class FloatingAiOverlayService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_TOGGLE_PANEL -> {
+                AiAssistantSession.refreshAccessibilityStatus(this)
                 val next = !AiAssistantSession.uiState.value.isSystemOverlayExpanded
                 AiAssistantSession.setSystemOverlayExpanded(next)
             }
@@ -353,6 +354,7 @@ class FloatingAiOverlayService : Service() {
                                             ?: break
                                         if (!change.pressed) {
                                             if (!dragged) {
+                                                AiAssistantSession.refreshAccessibilityStatus(this@FloatingAiOverlayService)
                                                 AiAssistantSession.setSystemOverlayExpanded(true)
                                             }
                                             break
