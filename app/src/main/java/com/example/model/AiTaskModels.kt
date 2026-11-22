@@ -129,7 +129,7 @@ data class TaskAssistantUiState(
     val stealthMode: StealthMode = StealthMode.NORMAL,
     val isAntiCaptureEnabled: Boolean = false,
     val autoSolveMode: AutoSolveMode = AutoSolveMode.IDLE,
-    val autoPaceSeconds: Int = 5,
+    val autoPaceSeconds: Int = 3,
     val autoSolvedCount: Int = 0,
     val lastDetectedQuestionLabel: String = "",
     val tapPulseEvent: TapPulseEvent? = null,

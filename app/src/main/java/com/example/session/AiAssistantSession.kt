@@ -255,12 +255,12 @@ object AiAssistantSession {
     }
 
     fun cycleAutoPace() {
-        val paces = listOf(3, 5, 10, 15, 30)
+        val paces = listOf(1, 2, 3, 5, 10, 30)
         val current = _uiState.value.autoPaceSeconds
         val idx = paces.indexOf(current)
         val next = paces[(idx + 1) % paces.size]
         _uiState.update { it.copy(autoPaceSeconds = next) }
-        showToast("Tempo Auto-Jawab: $next detik/soal")
+        showToast("Tempo Auto-Jawab: $next detik/soal", force = true)
     }
 
     fun solveSingleScreenQuestion(fromSystemOverlay: Boolean) {
@@ -315,22 +315,32 @@ object AiAssistantSession {
 
             try {
                 while (true) {
+                    val stepStartMs = System.currentTimeMillis()
                     val isKkmNaturalMiss = (mode == AutoSolveMode.AUTO_KKM_80) && ((solvedInRun + 1) % 5 == 0)
 
-                    // Collapse panel cleanly so the quiz app behind is unobstructed
+                    // Collapse panel cleanly on the first step; subsequent loops are already collapsed.
                     val wasExpanded = _uiState.value.isSystemOverlayExpanded
                     val wasInAppOpen = _uiState.value.isAiPanelOpen
-                    _uiState.update {
-                        it.copy(
-                            isCapturingScreen = true,
-                            isSystemOverlayExpanded = false,
-                            isAiPanelOpen = false
-                        )
+                    val needCollapseDelay = wasExpanded || wasInAppOpen
+                    if (needCollapseDelay) {
+                        _uiState.update {
+                            it.copy(
+                                isCapturingScreen = true,
+                                isSystemOverlayExpanded = false,
+                                isAiPanelOpen = false
+                            )
+                        }
+                        delay(120L)
+                    } else {
+                        _uiState.update { it.copy(isCapturingScreen = true) }
                     }
-                    delay(240L)
 
                     val snapshot: ScreenQuizSnapshot? = CerdasAccessibilityService.captureSnapshot()
-                    val bitmap: Bitmap? = if (ScreenProjectionService.isActive()) {
+                    val needBitmapCapture = snapshot == null ||
+                        snapshot.optionNodes.size < 2 ||
+                        hasVisualQuestionHint(snapshot.combinedText)
+
+                    val bitmap: Bitmap? = if (needBitmapCapture && ScreenProjectionService.isActive()) {
                         withContext(Dispatchers.Default) {
                             ScreenProjectionService.captureLatestBitmap()
                         }
@@ -342,9 +352,9 @@ object AiAssistantSession {
 
                     if (snapshot == null && bitmap == null) {
                         if (fromSystemOverlay) {
-                            _uiState.update { it.copy(isSystemOverlayExpanded = wasExpanded) }
+                            _uiState.update { it.copy(isSystemOverlayExpanded = wasExpanded || solvedInRun > 0) }
                         } else {
-                            _uiState.update { it.copy(isAiPanelOpen = wasInAppOpen) }
+                            _uiState.update { it.copy(isAiPanelOpen = wasInAppOpen || solvedInRun > 0) }
                         }
                         _uiState.update {
                             it.copy(
@@ -357,7 +367,10 @@ object AiAssistantSession {
                         break
                     }
 
-                    if (snapshot != null && snapshot.questionFingerprint == previousFingerprint && snapshot.nextButtonNode == null) {
+                    if (snapshot != null && previousFingerprint != null &&
+                        snapshot.questionFingerprint == previousFingerprint &&
+                        snapshot.nextButtonNode == null
+                    ) {
                         duplicateNoNextStreak++
                         if (duplicateNoNextStreak >= 2) {
                             _uiState.update {
@@ -368,7 +381,7 @@ object AiAssistantSession {
                                     aiStatusText = "Selesai • $solvedInRun soal terjawab"
                                 )
                             }
-                            showToast("Auto-Jawab selesai ($solvedInRun soal)")
+                            showToast("Auto-Jawab selesai ($solvedInRun soal)", force = true)
                             break
                         }
                     } else {
@@ -414,7 +427,7 @@ object AiAssistantSession {
                     if (CerdasAccessibilityService.isActive() && tapX != null && tapY != null) {
                         emitTapPulse(tapX, tapY, isNextButton = false)
                         if (!_uiState.value.isSilumanMode) {
-                            delay(120L)
+                            delay(80L)
                         }
                         tapped = CerdasAccessibilityService.tapOptionOrPoint(
                             optionNode = matchedNode,
@@ -458,23 +471,55 @@ object AiAssistantSession {
                         break
                     }
 
-                    // Auto loop pacing wait before advancing to next question
-                    val paceSec = _uiState.value.autoPaceSeconds.coerceIn(2, 60)
-                    for (remaining in paceSec downTo 1) {
-                        _uiState.update {
-                            it.copy(aiStatusText = "$qLabel • Lanjut dlm ${remaining}d")
+                    // Subtract AI latency from the configured pace so Tempo 1s-30s stays crisp
+                    val paceSec = _uiState.value.autoPaceSeconds.coerceIn(1, 60)
+                    val targetCycleMs = paceSec * 1000L
+                    val elapsedMs = System.currentTimeMillis() - stepStartMs
+                    val remainingWaitMs = (targetCycleMs - elapsedMs).coerceAtLeast(350L)
+
+                    if (remainingWaitMs > 1100L) {
+                        var leftMs = remainingWaitMs
+                        while (leftMs > 0L) {
+                            val secLeft = ((leftMs + 999L) / 1000L).toInt()
+                            _uiState.update {
+                                it.copy(aiStatusText = "$qLabel • Lanjut dlm ${secLeft}d")
+                            }
+                            val chunk = leftMs.coerceAtMost(1000L)
+                            delay(chunk)
+                            leftMs -= chunk
                         }
-                        delay(1000L)
+                    } else {
+                        _uiState.update {
+                            it.copy(aiStatusText = "$qLabel • Lanjut soal berikutnya...")
+                        }
+                        delay(remainingWaitMs)
                     }
 
-                    val nextNode = snapshot?.nextButtonNode
-                    val nextX = nextNode?.centerX ?: decision.nextTapXRatio?.let { it * screenW }
-                    val nextY = nextNode?.centerY ?: decision.nextTapYRatio?.let { it * screenH }
+                    // Re-scan screen AFTER option tap (many quiz apps enable/reveal "Soal Selanjutnya" only after picking an option)
+                    var postTapSnapshot = CerdasAccessibilityService.captureSnapshot() ?: snapshot
+                    var nextNode = postTapSnapshot?.nextButtonNode
+                    var nextX = nextNode?.centerX ?: decision.nextTapXRatio?.let { it * screenW }
+                    var nextY = nextNode?.centerY ?: decision.nextTapYRatio?.let { it * screenH }
+
+                    if (nextNode == null && nextX == null && CerdasAccessibilityService.isActive()) {
+                        _uiState.update {
+                            it.copy(aiStatusText = "$qLabel • Cari tombol Lanjut...")
+                        }
+                        CerdasAccessibilityService.scrollDownSlightly()
+                        delay(300L)
+                        val scrolledSnapshot = CerdasAccessibilityService.captureSnapshot()
+                        if (scrolledSnapshot != null) {
+                            postTapSnapshot = scrolledSnapshot
+                            nextNode = scrolledSnapshot.nextButtonNode
+                            nextX = nextNode?.centerX
+                            nextY = nextNode?.centerY
+                        }
+                    }
 
                     if (CerdasAccessibilityService.isActive() && nextX != null && nextY != null) {
                         emitTapPulse(nextX, nextY, isNextButton = true)
                         if (!_uiState.value.isSilumanMode) {
-                            delay(100L)
+                            delay(80L)
                         }
                         val nextTapped = CerdasAccessibilityService.tapOptionOrPoint(
                             optionNode = nextNode,
@@ -487,22 +532,41 @@ object AiAssistantSession {
                                     isGenerating = false,
                                     autoSolveMode = AutoSolveMode.IDLE,
                                     isSystemOverlayExpanded = fromSystemOverlay,
-                                    aiStatusText = "Auto berhenti • Tombol Lanjut tidak aktif"
+                                    aiStatusText = "Auto berhenti • Tombol Lanjut gagal diketuk"
                                 )
                             }
+                            showToast("Auto berhenti: gagal mengetuk tombol Lanjut", force = true)
                             break
                         }
-                        // Wait for next question UI transition
-                        delay(1150L)
+                        // Poll briefly until the next question renders instead of a blind fixed sleep
+                        for (attempt in 0 until 5) {
+                            delay(200L)
+                            val updatedSnapshot = CerdasAccessibilityService.captureSnapshot()
+                            if (updatedSnapshot != null && updatedSnapshot.questionFingerprint != previousFingerprint) {
+                                break
+                            }
+                        }
                     } else {
                         _uiState.update {
                             it.copy(
                                 isGenerating = false,
                                 autoSolveMode = AutoSolveMode.IDLE,
                                 isSystemOverlayExpanded = fromSystemOverlay,
-                                aiStatusText = "Selesai • Tombol Lanjut tidak ditemukan"
+                                aiStatusText = if (!CerdasAccessibilityService.isActive()) {
+                                    "Jawaban siap • Aktifkan Aksesibilitas untuk Auto-Tap"
+                                } else {
+                                    "Selesai • Tombol Lanjut tidak ditemukan"
+                                }
                             )
                         }
+                        showToast(
+                            if (!CerdasAccessibilityService.isActive()) {
+                                "Aktifkan Aksesibilitas Auto-Tap agar lanjut otomatis"
+                            } else {
+                                "Selesai • Tombol Lanjut tidak ditemukan ($solvedInRun soal)"
+                            },
+                            force = true
+                        )
                         break
                     }
                 }
@@ -537,6 +601,19 @@ object AiAssistantSession {
                 }
             }
         }
+    }
+
+    private fun hasVisualQuestionHint(text: String): Boolean {
+        val lower = text.lowercase()
+        return lower.contains("gambar") ||
+            lower.contains("grafik") ||
+            lower.contains("diagram") ||
+            lower.contains("tabel") ||
+            lower.contains("perhatikan") ||
+            lower.contains("ilustrasi") ||
+            lower.contains("bagan") ||
+            lower.contains("peta") ||
+            lower.contains("foto")
     }
 
     private fun findBestOptionNode(

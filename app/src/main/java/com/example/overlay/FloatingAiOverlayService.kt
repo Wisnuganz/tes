@@ -76,6 +76,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -215,6 +217,17 @@ class FloatingAiOverlayService : Service() {
                     secure = state.isAntiCaptureEnabled || state.stealthMode == StealthMode.INVISIBLE
                 )
             }
+        }
+
+        serviceScope.launch {
+            AiAssistantSession.uiState
+                .map { it.toastMessage }
+                .distinctUntilChanged()
+                .collectLatest { message ->
+                    if (!message.isNullOrBlank()) {
+                        Toast.makeText(this@FloatingAiOverlayService, message, Toast.LENGTH_SHORT).show()
+                    }
+                }
         }
     }
 

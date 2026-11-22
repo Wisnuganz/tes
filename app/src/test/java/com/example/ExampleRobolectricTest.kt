@@ -89,9 +89,12 @@ class ExampleRobolectricTest {
         AiAssistantSession.toggleSilumanMode()
         assertEquals(initialSiluman, AiAssistantSession.uiState.value.isSilumanMode)
 
-        val beforePace = AiAssistantSession.uiState.value.autoPaceSeconds
+        val initialPace = AiAssistantSession.uiState.value.autoPaceSeconds
         AiAssistantSession.cycleAutoPace()
-        assertTrue(AiAssistantSession.uiState.value.autoPaceSeconds != beforePace)
+        val afterFirstCycle = AiAssistantSession.uiState.value.autoPaceSeconds
+        assertTrue(afterFirstCycle != initialPace)
+        repeat(5) { AiAssistantSession.cycleAutoPace() }
+        assertEquals(initialPace, AiAssistantSession.uiState.value.autoPaceSeconds)
 
         AiAssistantSession.stopGeneration()
         assertEquals(AutoSolveMode.IDLE, AiAssistantSession.uiState.value.autoSolveMode)

@@ -398,7 +398,7 @@ class TaskAiRepository {
                 }
                 val sb = StringBuilder()
                 withTimeout(35_000L) {
-                    primaryModel.generateContentStream(contentReq).collect { chunk ->
+                    fallbackModel.generateContentStream(contentReq).collect { chunk ->
                         chunk.text?.let { sb.append(it) }
                     }
                 }

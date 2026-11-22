@@ -72,11 +72,6 @@ class CerdasAccessibilityService : AccessibilityService() {
 
         fun captureSnapshot(): ScreenQuizSnapshot? = instanceRef?.get()?.extractQuizSnapshot()
 
-        suspend fun tapPoint(x: Float, y: Float): Boolean {
-            val svc = instanceRef?.get() ?: return false
-            return svc.dispatchSingleTap(x, y)
-        }
-
         suspend fun tapOptionOrPoint(
             optionNode: UiTargetNode?,
             fallbackX: Float?,
@@ -96,6 +91,11 @@ class CerdasAccessibilityService : AccessibilityService() {
             }
             return false
         }
+
+        suspend fun scrollDownSlightly(): Boolean {
+            val svc = instanceRef?.get() ?: return false
+            return svc.dispatchVerticalScroll()
+        }
     }
 
     override fun onServiceConnected() {
@@ -106,7 +106,7 @@ class CerdasAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Passive listener; snapshots are pulled cleanly on-demand when Jawab 1 Soal / Auto runs.
+        // Snapshots are pulled on demand so background UI changes consume zero battery.
     }
 
     override fun onInterrupt() {
@@ -154,55 +154,119 @@ class CerdasAccessibilityService : AccessibilityService() {
         val optionCandidates = mutableListOf<UiTargetNode>()
         var nextBtnCandidate: UiTargetNode? = null
         var nextId = 1
-
         val seenBounds = hashSetOf<String>()
+
+        fun normalizeWhitespace(raw: String): String =
+            raw.replace(Regex("\\s+"), " ").trim()
+
+        fun collectLeafTexts(node: AccessibilityNodeInfo?, depth: Int, out: MutableList<String>) {
+            if (node == null || depth > 8 || out.size >= 8) return
+            val own = node.text?.toString()?.let(::normalizeWhitespace).orEmpty()
+            val desc = node.contentDescription?.toString()?.let(::normalizeWhitespace).orEmpty()
+            val txt = own.ifBlank { desc }
+            if (txt.isNotBlank() && txt !in out) {
+                out.add(txt)
+            }
+            for (i in 0 until node.childCount) {
+                collectLeafTexts(node.getChild(i), depth + 1, out)
+            }
+        }
 
         fun traverse(node: AccessibilityNodeInfo?, parentClickable: Boolean, depth: Int) {
             if (node == null || depth > 45 || !node.isVisibleToUser) return
 
-            val ownText = node.text?.toString()?.trim().orEmpty()
-            val descText = node.contentDescription?.toString()?.trim().orEmpty()
-            val text = ownText.ifBlank { descText }
-
             val rect = Rect()
             node.getBoundsInScreen(rect)
-            val validBounds = rect.width() > 20 && rect.height() > 20 &&
+            val validBounds = rect.width() > 24 && rect.height() > 24 &&
                 rect.centerX() in 1 until screenW &&
                 rect.centerY() in 1 until screenH
 
-            if (text.isNotBlank() && validBounds) {
-                textLines.add(text)
-                val normalized = text.lowercase()
+            val ownText = node.text?.toString()?.let(::normalizeWhitespace).orEmpty()
+            val descText = node.contentDescription?.toString()?.let(::normalizeWhitespace).orEmpty()
+            val directText = ownText.ifBlank { descText }
+
+            val isInteractiveElement = node.isClickable ||
+                node.className?.toString()?.contains("RadioButton", ignoreCase = true) == true ||
+                node.className?.toString()?.contains("Button", ignoreCase = true) == true ||
+                node.className?.toString()?.contains("CompoundButton", ignoreCase = true) == true
+
+            // If a clickable container holds split text children (e.g. "B." + "Paus menyusui anaknya" or "Soal" + "Selanjutnya"),
+            // aggregate them cleanly so we capture the whole option/button card and its full tap Rect.
+            if (validBounds && isInteractiveElement && directText.isBlank() && node.childCount in 1..6) {
+                val childTexts = mutableListOf<String>()
+                collectLeafTexts(node, 0, childTexts)
+                val merged = childTexts.joinToString(" ").let(::normalizeWhitespace)
+                if (merged.isNotBlank() && merged.length <= 220) {
+                    val lowerMerged = merged.lowercase()
+                    val boundsKey = "${rect.left}:${rect.top}:${rect.right}:${rect.bottom}"
+                    textLines.add(merged)
+
+                    if (isLikelyNextButton(lowerMerged) && !isDangerousFinishButton(lowerMerged)) {
+                        nextBtnCandidate = UiTargetNode(
+                            id = nextId++,
+                            label = merged,
+                            optionLetter = null,
+                            centerX = rect.exactCenterX(),
+                            centerY = rect.exactCenterY(),
+                            bounds = rect,
+                            isNextButton = true
+                        )
+                        return
+                    } else if (!isDangerousFinishButton(lowerMerged) && !isLikelyPreviousButton(lowerMerged)) {
+                        val letter = parseOptionLetter(merged)
+                        val looksLikeOptionCard = letter != null ||
+                            (rect.centerY() > screenH * 0.20f && rect.centerY() < screenH * 0.86f)
+                        if (looksLikeOptionCard && seenBounds.add(boundsKey)) {
+                            optionCandidates.add(
+                                UiTargetNode(
+                                    id = nextId++,
+                                    label = merged,
+                                    optionLetter = letter,
+                                    centerX = rect.exactCenterX(),
+                                    centerY = rect.exactCenterY(),
+                                    bounds = rect
+                                )
+                            )
+                            return
+                        }
+                    }
+                }
+            }
+
+            if (directText.isNotBlank() && validBounds) {
+                textLines.add(directText)
+                val normalized = directText.lowercase()
                 val boundsKey = "${rect.left}:${rect.top}:${rect.right}:${rect.bottom}"
+                val isClickableHere = isInteractiveElement || parentClickable
 
-                val isClickableHere = node.isClickable || parentClickable ||
-                    node.className?.toString()?.contains("RadioButton", ignoreCase = true) == true ||
-                    node.className?.toString()?.contains("Button", ignoreCase = true) == true ||
-                    node.className?.toString()?.contains("CompoundButton", ignoreCase = true) == true
-
+                // Allow Next button match even on WebViews where node.isClickable is false,
+                // as long as text strongly matches a Next button and isn't a Finish/Submit button.
                 val isNextNav = isLikelyNextButton(normalized) &&
                     !isDangerousFinishButton(normalized) &&
-                    isClickableHere
+                    !isLikelyPreviousButton(normalized)
 
-                if (isNextNav && nextBtnCandidate == null) {
-                    nextBtnCandidate = UiTargetNode(
-                        id = nextId++,
-                        label = text,
-                        optionLetter = null,
-                        centerX = rect.exactCenterX(),
-                        centerY = rect.exactCenterY(),
-                        bounds = rect,
-                        isNextButton = true
-                    )
+                if (isNextNav) {
+                    // Prefer lower half of screen / clickable button if multiple matches exist
+                    if (nextBtnCandidate == null || isClickableHere || rect.centerY() > (nextBtnCandidate?.centerY ?: 0f)) {
+                        nextBtnCandidate = UiTargetNode(
+                            id = nextId++,
+                            label = directText,
+                            optionLetter = null,
+                            centerX = rect.exactCenterX(),
+                            centerY = rect.exactCenterY(),
+                            bounds = rect,
+                            isNextButton = true
+                        )
+                    }
                 } else if (!isDangerousFinishButton(normalized) && !isLikelyPreviousButton(normalized)) {
-                    val letter = parseOptionLetter(text)
+                    val letter = parseOptionLetter(directText)
                     val looksLikeOptionRow = letter != null ||
-                        (isClickableHere && text.length in 1..180 && rect.centerY() > screenH * 0.22f && rect.centerY() < screenH * 0.86f)
+                        (isClickableHere && directText.length in 1..180 && rect.centerY() > screenH * 0.20f && rect.centerY() < screenH * 0.86f)
                     if (looksLikeOptionRow && seenBounds.add(boundsKey)) {
                         optionCandidates.add(
                             UiTargetNode(
                                 id = nextId++,
-                                label = text,
+                                label = directText,
                                 optionLetter = letter,
                                 centerX = rect.exactCenterX(),
                                 centerY = rect.exactCenterY(),
@@ -213,7 +277,7 @@ class CerdasAccessibilityService : AccessibilityService() {
                 }
             }
 
-            val passClickable = node.isClickable || parentClickable
+            val passClickable = isInteractiveElement || parentClickable
             for (i in 0 until node.childCount) {
                 traverse(node.getChild(i), passClickable, depth + 1)
             }
@@ -231,9 +295,8 @@ class CerdasAccessibilityService : AccessibilityService() {
         val questionNumber = detectQuestionNumberLabel(textLines)
         val fingerprint = (questionNumber + "|" + combined.take(220)).hashCode().toString()
 
-        // Prefer nodes with explicit A-E letters if present, otherwise keep top vertical candidates
         val prioritizedOptions = optionCandidates
-            .sortedBy { it.centerY }
+            .sortedWith(compareBy<UiTargetNode> { it.optionLetter == null }.thenBy { it.centerY })
             .distinctBy { "${it.optionLetter ?: ""}_${it.label}" }
             .take(8)
 
@@ -261,13 +324,17 @@ class CerdasAccessibilityService : AccessibilityService() {
     }
 
     private fun isLikelyNextButton(lower: String): Boolean {
+        if (lower.length > 48) return false
         return lower.contains("soal selanjutnya") ||
+            lower.contains("soal berikutnya") ||
             lower.contains("selanjutnya") ||
             lower.contains("berikutnya") ||
             lower == "next" ||
             lower.startsWith("next ") ||
             lower.endsWith(" next") ||
-            lower == "lanjut"
+            lower == "lanjut" ||
+            lower.startsWith("lanjut ") ||
+            lower == "berikut"
     }
 
     private fun isLikelyPreviousButton(lower: String): Boolean {
@@ -300,10 +367,44 @@ class CerdasAccessibilityService : AccessibilityService() {
         val safeX = x.coerceIn(2f, (resources.displayMetrics.widthPixels - 2).toFloat())
         val safeY = y.coerceIn(2f, (resources.displayMetrics.heightPixels - 2).toFloat())
         val path = Path().apply { moveTo(safeX, safeY) }
-        val stroke = GestureDescription.StrokeDescription(path, 0L, 65L)
+        val stroke = GestureDescription.StrokeDescription(path, 0L, 55L)
         val gesture = GestureDescription.Builder().addStroke(stroke).build()
 
-        return withTimeoutOrNull(1800L) {
+        return withTimeoutOrNull(1500L) {
+            suspendCancellableCoroutine { cont ->
+                val dispatched = dispatchGesture(
+                    gesture,
+                    object : GestureResultCallback() {
+                        override fun onCompleted(gestureDescription: GestureDescription?) {
+                            if (cont.isActive) cont.resume(true)
+                        }
+
+                        override fun onCancelled(gestureDescription: GestureDescription?) {
+                            if (cont.isActive) cont.resume(false)
+                        }
+                    },
+                    null
+                )
+                if (!dispatched && cont.isActive) {
+                    cont.resume(false)
+                }
+            }
+        } ?: false
+    }
+
+    private suspend fun dispatchVerticalScroll(): Boolean {
+        val metrics = resources.displayMetrics
+        val cx = metrics.widthPixels * 0.5f
+        val startY = metrics.heightPixels * 0.68f
+        val endY = metrics.heightPixels * 0.36f
+        val path = Path().apply {
+            moveTo(cx, startY)
+            lineTo(cx, endY)
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0L, 220L)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+        return withTimeoutOrNull(1500L) {
             suspendCancellableCoroutine { cont ->
                 val dispatched = dispatchGesture(
                     gesture,

@@ -179,6 +179,18 @@ fun TaskAssistantApp(
         }
     }
 
+    val openAppInfoSettings: () -> Unit = {
+        try {
+            val infoIntent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:${context.packageName}")
+            )
+            context.startActivity(infoIntent)
+        } catch (_: Exception) {
+            viewModel.showToast("Buka Setelan > Aplikasi > Cerdas AI > Izinkan setelan terbatas")
+        }
+    }
+
     LaunchedEffect(initialPickPhotoRequest) {
         if (initialPickPhotoRequest) {
             onConsumePhotoRequest()
@@ -279,7 +291,8 @@ fun TaskAssistantApp(
             onCopySuccess = viewModel::showToast,
             onSaveApiKey = { key -> viewModel.saveAndTestApiKey(context, key) },
             onClearApiKey = { viewModel.clearApiKey(context) },
-            onOpenAccessibilitySettings = openAccessibilitySettings
+            onOpenAccessibilitySettings = openAccessibilitySettings,
+            onOpenAppInfoSettings = openAppInfoSettings
         )
 
         DraggableFloatingAiBubble(

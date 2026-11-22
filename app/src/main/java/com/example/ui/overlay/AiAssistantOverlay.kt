@@ -305,10 +305,16 @@ fun AiPanelCardContent(
             .fillMaxWidth()
             .widthIn(max = 460.dp)
             .heightIn(max = if (isSystemOverlayContext) 560.dp else 680.dp)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = {}
+            .then(
+                if (!isSystemOverlayContext) {
+                    Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {}
+                    )
+                } else {
+                    Modifier
+                }
             )
             .testTag("ai_overlay_panel")
     ) {
@@ -477,6 +483,25 @@ fun AiPanelCardContent(
             }
 
             HorizontalDivider(color = AiCardBorder.copy(alpha = 0.55f), thickness = 1.dp)
+
+            if (!state.toastMessage.isNullOrBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = AiEmeraldTint,
+                    border = BorderStroke(1.dp, AiEmerald.copy(alpha = 0.65f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = state.toastMessage,
+                        color = AiTextPrimary,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+            }
 
             // Body Content
             Box(
@@ -756,6 +781,7 @@ private fun AiHomeworkToolsGrid(
         // AI Translasi (Siluman) Toggle Banner (matching reference video)
         if (onToggleSilumanMode != null) {
             Surface(
+                onClick = onToggleSilumanMode,
                 shape = RoundedCornerShape(14.dp),
                 color = if (state.isSilumanMode) AiEmeraldTint else AiPanelElevated,
                 border = BorderStroke(
@@ -764,7 +790,6 @@ private fun AiHomeworkToolsGrid(
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onToggleSilumanMode)
                     .testTag("siluman_mode_toggle")
             ) {
                 Row(
@@ -1897,6 +1922,7 @@ private fun AiToolActionCard(
     modifier: Modifier = Modifier
 ) {
     Surface(
+        onClick = onClick,
         shape = RoundedCornerShape(14.dp),
         color = if (isActive) accentColor.copy(alpha = 0.14f) else AiPanelElevated,
         border = BorderStroke(
@@ -1904,8 +1930,7 @@ private fun AiToolActionCard(
             color = if (isActive) accentColor else AiCardBorder
         ),
         modifier = modifier
-            .minimumInteractiveComponentSize()
-            .clickable(onClick = onClick)
+            .heightIn(min = 78.dp)
             .testTag(tag)
     ) {
         Column(

@@ -122,6 +122,7 @@ fun TaskWorkspaceScreen(
     onSaveApiKey: (String) -> Unit,
     onClearApiKey: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
+    onOpenAppInfoSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -673,6 +674,73 @@ fun TaskWorkspaceScreen(
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
                                     )
+                                }
+                            }
+
+                            if (!state.isAccessibilityEnabled) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = CbtBlueLightBg,
+                                    border = BorderStroke(1.dp, CbtRoyalBlue.copy(alpha = 0.25f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "Muncul 'Setelan terbatas' di HP Xiaomi / Android?",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CbtRoyalBlue
+                                        )
+                                        Text(
+                                            text = "1. Ketuk 'Buka Info Aplikasi' di bawah -> ketuk 'Izinkan setelan terbatas' (di bagian bawah halaman atau menu ⋮ pojok kanan atas).\n2. Kembali, ketuk 'Buka Aksesibilitas' -> aktifkan 'Cerdas AI Auto-Jawab'.",
+                                            fontSize = 11.sp,
+                                            lineHeight = 16.sp,
+                                            color = CbtTextPrimary
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Button(
+                                                onClick = onOpenAppInfoSettings,
+                                                shape = RoundedCornerShape(8.dp),
+                                                colors = ButtonDefaults.buttonColors(containerColor = CbtRoyalBlue),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(40.dp)
+                                                    .testTag("workspace_open_app_info_button")
+                                            ) {
+                                                Text(
+                                                    text = "1. Info Aplikasi",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            OutlinedButton(
+                                                onClick = onOpenAccessibilitySettings,
+                                                shape = RoundedCornerShape(8.dp),
+                                                border = BorderStroke(1.dp, CbtRoyalBlue),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(40.dp)
+                                                    .testTag("workspace_open_accessibility_button")
+                                            ) {
+                                                Text(
+                                                    text = "2. Aksesibilitas",
+                                                    color = CbtRoyalBlue,
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
 

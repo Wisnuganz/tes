@@ -135,7 +135,9 @@ class DirectGeminiRestClient {
         attachedBitmap: Bitmap?,
         temperature: Double = 0.1,
         jsonResponse: Boolean = true,
-        verifiedHintModel: String = ""
+        verifiedHintModel: String = "",
+        disableThinking: Boolean = true,
+        maxOutputTokens: Int? = 320
     ): String = withContext(Dispatchers.IO) {
         val cleanKey = apiKey.trim()
         val candidates = buildModelCandidates(preferFast = true, verifiedHintModel = verifiedHintModel)
@@ -145,13 +147,38 @@ class DirectGeminiRestClient {
             attachedBitmap = attachedBitmap,
             priorMessages = emptyList(),
             temperature = temperature,
-            responseMimeType = if (jsonResponse) "application/json" else null
+            responseMimeType = if (jsonResponse) "application/json" else null,
+            disableThinking = disableThinking,
+            maxOutputTokens = maxOutputTokens
         )
+        val payloadNoThinking = if (disableThinking) {
+            buildRequestPayload(
+                systemPrompt = systemPrompt,
+                userPrompt = userPrompt,
+                attachedBitmap = attachedBitmap,
+                priorMessages = emptyList(),
+                temperature = temperature,
+                responseMimeType = if (jsonResponse) "application/json" else null,
+                disableThinking = false,
+                maxOutputTokens = maxOutputTokens
+            )
+        } else {
+            payload
+        }
 
         var lastError: Exception? = null
         for (modelName in candidates) {
             try {
-                val result = callSingleModel(cleanKey, modelName, payload)
+                val result = try {
+                    callSingleModel(cleanKey, modelName, payload)
+                } catch (e: Exception) {
+                    val m = e.message.orEmpty().lowercase()
+                    if (disableThinking && m.contains("http 400") && m.contains("thinking")) {
+                        callSingleModel(cleanKey, modelName, payloadNoThinking)
+                    } else {
+                        throw e
+                    }
+                }
                 discoveredFastModel = modelName
                 return@withContext result
             } catch (e: CancellationException) {
@@ -171,7 +198,16 @@ class DirectGeminiRestClient {
 
         val available = fetchAvailableGenerateModels(cleanKey)
         val discovered = pickPreferredModel(available, preferLite = true)
-        val result = callSingleModel(cleanKey, discovered, payload)
+        val result = try {
+            callSingleModel(cleanKey, discovered, payload)
+        } catch (e: Exception) {
+            val m = e.message.orEmpty().lowercase()
+            if (disableThinking && m.contains("http 400") && m.contains("thinking")) {
+                callSingleModel(cleanKey, discovered, payloadNoThinking)
+            } else {
+                throw e
+            }
+        }
         discoveredFastModel = discovered
         result
     }
@@ -180,8 +216,8 @@ class DirectGeminiRestClient {
         val ordered = linkedSetOf<String>()
         if (preferFast) {
             discoveredFastModel?.let { ordered.add(it) }
-            if (verifiedHintModel.isNotBlank()) ordered.add(verifiedHintModel)
             ordered.addAll(defaultCandidateModels)
+            if (verifiedHintModel.isNotBlank()) ordered.add(verifiedHintModel)
         } else {
             discoveredPrimaryModel?.let { ordered.add(it) }
             if (verifiedHintModel.isNotBlank()) ordered.add(verifiedHintModel)
@@ -360,7 +396,9 @@ class DirectGeminiRestClient {
         attachedBitmap: Bitmap?,
         priorMessages: List<AiChatMessage>,
         temperature: Double = 0.2,
-        responseMimeType: String? = null
+        responseMimeType: String? = null,
+        disableThinking: Boolean = false,
+        maxOutputTokens: Int? = null
     ): String {
         val root = JSONObject()
         root.put(
@@ -386,7 +424,7 @@ class DirectGeminiRestClient {
         val currentParts = JSONArray()
         if (attachedBitmap != null) {
             val baos = ByteArrayOutputStream()
-            attachedBitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+            attachedBitmap.compress(Bitmap.CompressFormat.JPEG, 82, baos)
             val base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
             currentParts.put(
                 JSONObject().put(
@@ -410,6 +448,12 @@ class DirectGeminiRestClient {
             .put("temperature", temperature)
         if (!responseMimeType.isNullOrBlank()) {
             genConfig.put("responseMimeType", responseMimeType)
+        }
+        if (maxOutputTokens != null) {
+            genConfig.put("maxOutputTokens", maxOutputTokens)
+        }
+        if (disableThinking) {
+            genConfig.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
         }
         root.put("generationConfig", genConfig)
         return root.toString()
