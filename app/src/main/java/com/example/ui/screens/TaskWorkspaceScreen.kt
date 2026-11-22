@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.TouchApp
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
@@ -85,6 +86,7 @@ import com.example.model.StealthMode
 import com.example.model.TaskAssistantUiState
 import com.example.model.TaskToolType
 import com.example.ui.components.AiKnotOrbIcon
+import com.example.ui.components.ChatGptMarkdownText
 import com.example.ui.theme.AiAmber
 import com.example.ui.theme.AiEmerald
 import com.example.ui.theme.AiEmeraldLightBg
@@ -119,6 +121,7 @@ fun TaskWorkspaceScreen(
     onCopySuccess: (String) -> Unit,
     onSaveApiKey: (String) -> Unit,
     onClearApiKey: () -> Unit,
+    onOpenAccessibilitySettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -616,6 +619,63 @@ fun TaskWorkspaceScreen(
                                 }
                             }
 
+                            // Auto-Tap Aksesibilitas (Baca soal & ketuk jawaban otomatis)
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (state.isAccessibilityEnabled) AiEmeraldLightBg else CbtSubtleSurface,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (state.isAccessibilityEnabled) AiEmerald else CbtCardBorder
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onOpenAccessibilitySettings)
+                                    .testTag("workspace_accessibility_toggle")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.TouchApp,
+                                            contentDescription = "Auto-Tap Aksesibilitas",
+                                            tint = if (state.isAccessibilityEnabled) AiEmerald else CbtRoyalBlue,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Column {
+                                            Text(
+                                                text = "Auto-Tap Aksesibilitas (Jawab Otomatis)",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = CbtTextPrimary
+                                            )
+                                            Text(
+                                                text = if (state.isAccessibilityEnabled) {
+                                                    "Aktif • Siap Jawab 1 Soal, Auto 100 & KKM"
+                                                } else {
+                                                    "Ketuk untuk aktifkan 'Cerdas AI Auto-Jawab' di Setelan"
+                                                },
+                                                fontSize = 11.sp,
+                                                color = CbtTextSecondary
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = if (state.isAccessibilityEnabled) "AKTIF" else "ATUR",
+                                        color = if (state.isAccessibilityEnabled) AiEmerald else CbtRoyalBlue,
+                                        fontFamily = JetBrainsMonoFontFamily,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
                             if (state.isLiveScreenActive) {
                                 OutlinedButton(
                                     onClick = onScanScreenNow,
@@ -1082,10 +1142,16 @@ private fun SolvedTaskHistoryCard(
                 border = BorderStroke(1.dp, CbtCardBorder),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = item.answerText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = CbtTextPrimary,
+                ChatGptMarkdownText(
+                    markdown = item.answerText,
+                    textColor = CbtTextPrimary,
+                    accentColor = AiEmerald,
+                    secondaryColor = CbtTextSecondary,
+                    codeBackgroundColor = CbtNavyHeader,
+                    inlineCodeBackgroundColor = AiEmeraldLightBg,
+                    calloutBackgroundColor = AiEmeraldLightBg,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
                     modifier = Modifier.padding(12.dp)
                 )
             }

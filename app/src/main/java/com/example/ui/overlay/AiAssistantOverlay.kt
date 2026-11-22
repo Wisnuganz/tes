@@ -57,11 +57,15 @@ import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Percent
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Summarize
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.ErrorOutline
@@ -105,10 +109,12 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.model.AiChatMessage
 import com.example.model.AiPanelTab
+import com.example.model.AutoSolveMode
 import com.example.model.StealthMode
 import com.example.model.TaskAssistantUiState
 import com.example.model.TaskToolType
 import com.example.ui.components.AiKnotOrbIcon
+import com.example.ui.components.ChatGptMarkdownText
 import com.example.ui.screens.decodeBitmapFromUri
 import com.example.ui.theme.AiAmber
 import com.example.ui.theme.AiBlue
@@ -148,6 +154,11 @@ fun AiAssistantOverlay(
     onRetryLastPrompt: (() -> Unit)? = null,
     onSaveApiKey: ((String) -> Unit)? = null,
     onClearApiKey: (() -> Unit)? = null,
+    onToggleSilumanMode: (() -> Unit)? = null,
+    onCycleAutoPace: (() -> Unit)? = null,
+    onSolveSingleQuestion: (() -> Unit)? = null,
+    onToggleAutoSolve: ((targetKkm: Boolean) -> Unit)? = null,
+    onOpenAccessibilitySettings: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -237,7 +248,12 @@ fun AiAssistantOverlay(
                 onScanScreen = onScanScreen,
                 onRetryLastPrompt = onRetryLastPrompt,
                 onSaveApiKey = onSaveApiKey,
-                onClearApiKey = onClearApiKey
+                onClearApiKey = onClearApiKey,
+                onToggleSilumanMode = onToggleSilumanMode,
+                onCycleAutoPace = onCycleAutoPace,
+                onSolveSingleQuestion = onSolveSingleQuestion,
+                onToggleAutoSolve = onToggleAutoSolve,
+                onOpenAccessibilitySettings = onOpenAccessibilitySettings
             )
         }
     }
@@ -270,7 +286,12 @@ fun AiPanelCardContent(
     onStopSystemOverlay: (() -> Unit)? = null,
     onRetryLastPrompt: (() -> Unit)? = null,
     onSaveApiKey: ((String) -> Unit)? = null,
-    onClearApiKey: (() -> Unit)? = null
+    onClearApiKey: (() -> Unit)? = null,
+    onToggleSilumanMode: (() -> Unit)? = null,
+    onCycleAutoPace: (() -> Unit)? = null,
+    onSolveSingleQuestion: (() -> Unit)? = null,
+    onToggleAutoSolve: ((targetKkm: Boolean) -> Unit)? = null,
+    onOpenAccessibilitySettings: (() -> Unit)? = null
 ) {
     val clipboardManager = LocalClipboardManager.current
     var chatInputText by remember { mutableStateOf("") }
@@ -339,7 +360,7 @@ fun AiPanelCardContent(
                             .testTag("header_quick_mode_badge")
                     ) {
                         Text(
-                            text = if (state.isQuickAnswerMode) "Cepat • G3" else stringResource(R.string.ai_model_badge),
+                            text = if (state.isQuickAnswerMode) "Cepat • G3" else "Akurat • G3",
                             color = AiEmerald,
                             fontFamily = JetBrainsMonoFontFamily,
                             fontSize = 10.sp,
@@ -499,7 +520,12 @@ fun AiPanelCardContent(
                             onScanScreen = onScanScreen,
                             onStopGeneration = onStopGeneration,
                             onSaveApiKey = onSaveApiKey,
-                            onClearApiKey = onClearApiKey
+                            onClearApiKey = onClearApiKey,
+                            onToggleSilumanMode = onToggleSilumanMode,
+                            onCycleAutoPace = onCycleAutoPace,
+                            onSolveSingleQuestion = onSolveSingleQuestion,
+                            onToggleAutoSolve = onToggleAutoSolve,
+                            onOpenAccessibilitySettings = onOpenAccessibilitySettings
                         )
                     }
                 } else {
@@ -706,7 +732,12 @@ private fun AiHomeworkToolsGrid(
     onScanScreen: (() -> Unit)?,
     onStopGeneration: () -> Unit,
     onSaveApiKey: ((String) -> Unit)? = null,
-    onClearApiKey: (() -> Unit)? = null
+    onClearApiKey: (() -> Unit)? = null,
+    onToggleSilumanMode: (() -> Unit)? = null,
+    onCycleAutoPace: (() -> Unit)? = null,
+    onSolveSingleQuestion: (() -> Unit)? = null,
+    onToggleAutoSolve: ((targetKkm: Boolean) -> Unit)? = null,
+    onOpenAccessibilitySettings: (() -> Unit)? = null
 ) {
     val clipboardManager = LocalClipboardManager.current
     var showApiKeyEditor by remember(state.hasCustomApiKey) {
@@ -722,6 +753,247 @@ private fun AiHomeworkToolsGrid(
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
+        // AI Translasi (Siluman) Toggle Banner (matching reference video)
+        if (onToggleSilumanMode != null) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = if (state.isSilumanMode) AiEmeraldTint else AiPanelElevated,
+                border = BorderStroke(
+                    1.dp,
+                    if (state.isSilumanMode) AiEmerald.copy(alpha = 0.7f) else AiCardBorder
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggleSilumanMode)
+                    .testTag("siluman_mode_toggle")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (state.isSilumanMode) AiEmerald.copy(alpha = 0.25f) else AiCardDark
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VisibilityOff,
+                                contentDescription = "AI Siluman",
+                                tint = if (state.isSilumanMode) AiEmerald else AiStopRed,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "AI Translasi (Siluman)",
+                                color = AiTextPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = if (state.isSilumanMode) {
+                                    "Aktif • Tanpa efek laser & toast"
+                                } else {
+                                    "Nonaktif • Animasi & laser terlihat"
+                                },
+                                color = AiTextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (state.isSilumanMode) AiEmerald else AiCardDark,
+                        border = BorderStroke(
+                            1.dp,
+                            if (state.isSilumanMode) AiEmerald else AiCardBorder
+                        )
+                    ) {
+                        Text(
+                            text = if (state.isSilumanMode) "ON" else "OFF",
+                            color = if (state.isSilumanMode) Color.White else AiTextPrimary,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Video-style 2x3 Auto-Jawab Action Grid
+        if (onSolveSingleQuestion != null && onToggleAutoSolve != null) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AiToolActionCard(
+                        title = "Auto Nilai 100",
+                        subtitle = if (state.autoSolveMode == AutoSolveMode.AUTO_100) {
+                            "Aktif • Klik untuk henti"
+                        } else {
+                            "Selesaikan (${state.autoPaceSeconds}d/soal)"
+                        },
+                        badgeText = "100%",
+                        icon = Icons.Default.AutoAwesome,
+                        accentColor = AiEmerald,
+                        isActive = state.autoSolveMode == AutoSolveMode.AUTO_100,
+                        onClick = { onToggleAutoSolve(false) },
+                        tag = "tool_auto_100",
+                        modifier = Modifier.weight(1f)
+                    )
+                    AiToolActionCard(
+                        title = "Auto Aman KKM",
+                        subtitle = if (state.autoSolveMode == AutoSolveMode.AUTO_KKM_80) {
+                            "Aktif • Klik untuk henti"
+                        } else {
+                            "Skor natural ~80%"
+                        },
+                        badgeText = "KKM 80",
+                        icon = Icons.Default.Percent,
+                        accentColor = AiAmber,
+                        isActive = state.autoSolveMode == AutoSolveMode.AUTO_KKM_80,
+                        onClick = { onToggleAutoSolve(true) },
+                        tag = "tool_auto_kkm",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AiToolActionCard(
+                        title = "Jawab 1 Soal",
+                        subtitle = "Isi nomor aktif",
+                        badgeText = "1 SOAL",
+                        icon = Icons.Default.PlayArrow,
+                        accentColor = AiBlue,
+                        isActive = state.autoSolveMode == AutoSolveMode.SINGLE_QUESTION,
+                        onClick = onSolveSingleQuestion,
+                        tag = "tool_solve_single",
+                        modifier = Modifier.weight(1f)
+                    )
+                    AiToolActionCard(
+                        title = "Tempo ${state.autoPaceSeconds} Detik",
+                        subtitle = "1 soal tiap ${state.autoPaceSeconds} detik",
+                        badgeText = "${state.autoPaceSeconds}s",
+                        icon = Icons.Default.Timer,
+                        accentColor = AiPurple,
+                        isActive = false,
+                        onClick = { onCycleAutoPace?.invoke() },
+                        tag = "tool_cycle_pace",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AiToolActionCard(
+                        title = "Stop Generation",
+                        subtitle = "Hentikan proses AI",
+                        badgeText = "STOP",
+                        icon = Icons.Default.Stop,
+                        accentColor = AiStopRed,
+                        isActive = state.isGenerating,
+                        onClick = onStopGeneration,
+                        tag = "tool_stop_generation",
+                        modifier = Modifier.weight(1f)
+                    )
+                    AiToolActionCard(
+                        title = "Mode Samaran",
+                        subtitle = "Tombol disamarkan (${state.stealthMode.badge})",
+                        badgeText = if (state.stealthMode == StealthMode.NORMAL) "OFF" else "AKTIF",
+                        icon = Icons.Default.VisibilityOff,
+                        accentColor = AiEmerald,
+                        isActive = state.stealthMode != StealthMode.NORMAL,
+                        onClick = {
+                            val next = when (state.stealthMode) {
+                                StealthMode.NORMAL -> StealthMode.DIM_16
+                                StealthMode.DIM_16 -> StealthMode.INVISIBLE
+                                StealthMode.INVISIBLE -> StealthMode.NORMAL
+                            }
+                            onSelectStealthMode(next)
+                        },
+                        tag = "tool_cycle_stealth",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        // Accessibility Auto-Tap Readiness Card
+        if (onOpenAccessibilitySettings != null && !state.isAccessibilityEnabled) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = AiPanelElevated,
+                border = BorderStroke(1.dp, AiBlue.copy(alpha = 0.6f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenAccessibilitySettings)
+                    .testTag("overlay_enable_accessibility_button")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.TouchApp,
+                            contentDescription = "Aktifkan Auto-Tap",
+                            tint = AiBlue,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Column {
+                            Text(
+                                text = "Aktifkan Auto-Tap Aksesibilitas",
+                                color = AiTextPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Agar AI bisa membaca soal & mengetuk jawaban A-E otomatis",
+                                color = AiTextSecondary,
+                                fontSize = 10.sp
+                            )
+                        }
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(7.dp),
+                        color = AiBlue
+                    ) {
+                        Text(
+                            text = "ATUR",
+                            color = Color.White,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
         if (onSaveApiKey != null) {
             Surface(
                 shape = RoundedCornerShape(14.dp),
@@ -1595,9 +1867,14 @@ private fun ActiveToolSolverPane(
                         }
                     }
 
-                    Text(
-                        text = liveOutput,
-                        color = AiTextPrimary,
+                    ChatGptMarkdownText(
+                        markdown = liveOutput,
+                        textColor = AiTextPrimary,
+                        accentColor = AiEmerald,
+                        secondaryColor = AiTextSecondary,
+                        codeBackgroundColor = AiCardDark,
+                        inlineCodeBackgroundColor = AiEmeraldTint,
+                        calloutBackgroundColor = AiEmeraldTint,
                         fontSize = 13.sp,
                         lineHeight = 19.sp
                     )
@@ -1850,17 +2127,33 @@ private fun ChatBubbleItem(
                     )
                 }
 
-                val displayText = if (message.isStreaming && message.text.isEmpty()) {
-                    "Sedang mengerjakan..."
+                if (message.isStreaming && message.text.isEmpty()) {
+                    Text(
+                        text = "Sedang mengerjakan...",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp
+                    )
+                } else if (message.isUser || message.isError) {
+                    Text(
+                        text = message.text,
+                        color = if (message.isError) Color(0xFFFCA5A5) else Color.White,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp
+                    )
                 } else {
-                    message.text
+                    ChatGptMarkdownText(
+                        markdown = message.text,
+                        textColor = AiTextPrimary,
+                        accentColor = AiEmerald,
+                        secondaryColor = AiTextSecondary,
+                        codeBackgroundColor = AiCardDark,
+                        inlineCodeBackgroundColor = AiEmeraldTint,
+                        calloutBackgroundColor = AiEmeraldTint,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp
+                    )
                 }
-                Text(
-                    text = displayText,
-                    color = if (message.isError) Color(0xFFFCA5A5) else Color.White,
-                    fontSize = 13.sp,
-                    lineHeight = 19.sp
-                )
 
                 if (!message.isUser && !message.isStreaming && !message.isError && message.text.isNotBlank()) {
                     Row(

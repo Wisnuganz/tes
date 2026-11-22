@@ -7,11 +7,17 @@ import com.example.ai.GeminiApiKeyStore
 import com.example.ai.TaskAiRepository
 import com.example.model.AiChatMessage
 import com.example.model.AiPanelTab
+import com.example.model.AutoAnswerDecision
+import com.example.model.AutoSolveMode
 import com.example.model.SolvedTaskItem
 import com.example.model.StealthMode
+import com.example.model.TapPulseEvent
 import com.example.model.TaskAssistantUiState
 import com.example.model.TaskToolType
+import com.example.overlay.CerdasAccessibilityService
 import com.example.overlay.ScreenProjectionService
+import com.example.overlay.ScreenQuizSnapshot
+import com.example.overlay.UiTargetNode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,25 +57,39 @@ object AiAssistantSession {
     val uiState: StateFlow<TaskAssistantUiState> = _uiState.asStateFlow()
 
     private var activeStreamJob: Job? = null
+    private var autoSolveJob: Job? = null
     private var toastJob: Job? = null
+    private var pulseJob: Job? = null
+    private var lastTapPulseId: Long = 0L
 
     fun init(context: Context) {
         GeminiApiKeyStore.init(context)
         val savedKey = GeminiApiKeyStore.getApiKey(context)
         val hasKey = savedKey.isNotBlank()
+        val accActive = CerdasAccessibilityService.isServiceEnabledInSettings(context)
         _uiState.update {
             it.copy(
                 hasCustomApiKey = hasKey,
                 maskedApiKey = GeminiApiKeyStore.maskKey(savedKey),
+                isAccessibilityEnabled = accActive,
                 apiKeyStatusMessage = if (hasKey) {
                     val modelHint = GeminiApiKeyStore.getVerifiedModel(context)
                     if (modelHint.isNotBlank()) "API Key aktif ($modelHint)" else "API Key tersimpan • Siap dipakai"
                 } else {
                     null
                 },
-                aiStatusText = if (hasKey) "Siap • Gemini API Key" else "Siap • Tugas AI Engine"
+                aiStatusText = if (hasKey) "Siap • CBT & Tugas AI" else "Siap • Tugas AI Engine"
             )
         }
+    }
+
+    fun refreshAccessibilityStatus(context: Context) {
+        val active = CerdasAccessibilityService.isServiceEnabledInSettings(context)
+        _uiState.update { it.copy(isAccessibilityEnabled = active) }
+    }
+
+    fun setAccessibilityEnabled(enabled: Boolean) {
+        _uiState.update { it.copy(isAccessibilityEnabled = enabled) }
     }
 
     fun saveAndTestApiKey(context: Context, rawKey: String) {
@@ -219,6 +239,384 @@ object AiAssistantSession {
         _uiState.update { it.copy(isQuickAnswerMode = !it.isQuickAnswerMode) }
     }
 
+    fun toggleSilumanMode() {
+        val next = !_uiState.value.isSilumanMode
+        _uiState.update {
+            it.copy(
+                isSilumanMode = next,
+                toastMessage = if (next) null else it.toastMessage,
+                tapPulseEvent = if (next) null else it.tapPulseEvent,
+                aiStatusText = if (next) "AI Siluman AKTIF • Tanpa efek laser" else "Siap • Efek laser terlihat"
+            )
+        }
+        if (!next) {
+            showToast("Mode Siluman dimatikan (laser & toast aktif)")
+        }
+    }
+
+    fun cycleAutoPace() {
+        val paces = listOf(3, 5, 10, 15, 30)
+        val current = _uiState.value.autoPaceSeconds
+        val idx = paces.indexOf(current)
+        val next = paces[(idx + 1) % paces.size]
+        _uiState.update { it.copy(autoPaceSeconds = next) }
+        showToast("Tempo Auto-Jawab: $next detik/soal")
+    }
+
+    fun solveSingleScreenQuestion(fromSystemOverlay: Boolean) {
+        if (autoSolveJob?.isActive == true) {
+            stopGeneration()
+            return
+        }
+        launchAutoSolveRoutine(
+            mode = AutoSolveMode.SINGLE_QUESTION,
+            fromSystemOverlay = fromSystemOverlay
+        )
+    }
+
+    fun toggleAutoSolveLoop(targetKkm: Boolean, fromSystemOverlay: Boolean) {
+        val requestedMode = if (targetKkm) AutoSolveMode.AUTO_KKM_80 else AutoSolveMode.AUTO_100
+        if (_uiState.value.autoSolveMode == requestedMode && autoSolveJob?.isActive == true) {
+            stopGeneration()
+            return
+        }
+        launchAutoSolveRoutine(
+            mode = requestedMode,
+            fromSystemOverlay = fromSystemOverlay
+        )
+    }
+
+    private fun launchAutoSolveRoutine(mode: AutoSolveMode, fromSystemOverlay: Boolean) {
+        val hasAccessibility = CerdasAccessibilityService.isActive()
+        val hasLiveScreen = ScreenProjectionService.isActive()
+        if (!hasAccessibility && !hasLiveScreen) {
+            showToast("Aktifkan Aksesibilitas Auto-Tap atau Live Screen dahulu", force = true)
+            _uiState.update {
+                it.copy(aiStatusText = "Perlu Aksesibilitas / Live Screen")
+            }
+            return
+        }
+
+        autoSolveJob?.cancel()
+        activeStreamJob?.cancel()
+
+        autoSolveJob = scope.launch {
+            var solvedInRun = 0
+            var previousFingerprint: String? = null
+            var duplicateNoNextStreak = 0
+
+            _uiState.update {
+                it.copy(
+                    autoSolveMode = mode,
+                    isGenerating = true,
+                    aiStatusText = "${mode.label} berjalan..."
+                )
+            }
+
+            try {
+                while (true) {
+                    val isKkmNaturalMiss = (mode == AutoSolveMode.AUTO_KKM_80) && ((solvedInRun + 1) % 5 == 0)
+
+                    // Collapse panel cleanly so the quiz app behind is unobstructed
+                    val wasExpanded = _uiState.value.isSystemOverlayExpanded
+                    val wasInAppOpen = _uiState.value.isAiPanelOpen
+                    _uiState.update {
+                        it.copy(
+                            isCapturingScreen = true,
+                            isSystemOverlayExpanded = false,
+                            isAiPanelOpen = false
+                        )
+                    }
+                    delay(240L)
+
+                    val snapshot: ScreenQuizSnapshot? = CerdasAccessibilityService.captureSnapshot()
+                    val bitmap: Bitmap? = if (ScreenProjectionService.isActive()) {
+                        withContext(Dispatchers.Default) {
+                            ScreenProjectionService.captureLatestBitmap()
+                        }
+                    } else {
+                        null
+                    }
+
+                    _uiState.update { it.copy(isCapturingScreen = false) }
+
+                    if (snapshot == null && bitmap == null) {
+                        if (fromSystemOverlay) {
+                            _uiState.update { it.copy(isSystemOverlayExpanded = wasExpanded) }
+                        } else {
+                            _uiState.update { it.copy(isAiPanelOpen = wasInAppOpen) }
+                        }
+                        _uiState.update {
+                            it.copy(
+                                isGenerating = false,
+                                autoSolveMode = AutoSolveMode.IDLE,
+                                aiStatusText = "Soal tidak terdeteksi di layar"
+                            )
+                        }
+                        showToast("Tidak ada teks soal/layar terbaca. Pastikan soal tampil di layar.", force = true)
+                        break
+                    }
+
+                    if (snapshot != null && snapshot.questionFingerprint == previousFingerprint && snapshot.nextButtonNode == null) {
+                        duplicateNoNextStreak++
+                        if (duplicateNoNextStreak >= 2) {
+                            _uiState.update {
+                                it.copy(
+                                    isGenerating = false,
+                                    autoSolveMode = AutoSolveMode.IDLE,
+                                    isSystemOverlayExpanded = fromSystemOverlay,
+                                    aiStatusText = "Selesai • $solvedInRun soal terjawab"
+                                )
+                            }
+                            showToast("Auto-Jawab selesai ($solvedInRun soal)")
+                            break
+                        }
+                    } else {
+                        duplicateNoNextStreak = 0
+                    }
+                    previousFingerprint = snapshot?.questionFingerprint
+
+                    _uiState.update {
+                        it.copy(aiStatusText = "AI menganalisis soal...")
+                    }
+
+                    val optionDescriptions = snapshot?.optionNodes?.map { node ->
+                        val xr = "%.3f".format(Locale.US, node.centerX / snapshot.screenWidth.toFloat())
+                        val yr = "%.3f".format(Locale.US, node.centerY / snapshot.screenHeight.toFloat())
+                        "- [${node.optionLetter ?: "?"}] \"${node.label}\" @ ($xr, $yr)"
+                    }.orEmpty()
+
+                    val decision = aiRepository.solveQuestionForAutoTap(
+                        screenText = snapshot?.combinedText.orEmpty(),
+                        optionDescriptions = optionDescriptions,
+                        attachedBitmap = bitmap,
+                        preferNaturalMissForKkm = isKkmNaturalMiss
+                    )
+
+                    solvedInRun++
+                    val totalSolved = _uiState.value.autoSolvedCount + 1
+                    val qLabel = snapshot?.questionNumberLabel?.ifBlank { decision.questionNumber }
+                        ?: decision.questionNumber
+
+                    logAutoSolvedResult(decision, qLabel, bitmap)
+
+                    // Match target node or fallback ratio coordinates
+                    val matchedNode = findBestOptionNode(snapshot, decision)
+                    val screenW = snapshot?.screenWidth ?: bitmap?.width ?: 1080
+                    val screenH = snapshot?.screenHeight ?: bitmap?.height ?: 2400
+
+                    val tapX = matchedNode?.centerX
+                        ?: decision.answerTapXRatio?.let { it * screenW }
+                    val tapY = matchedNode?.centerY
+                        ?: decision.answerTapYRatio?.let { it * screenH }
+
+                    var tapped = false
+                    if (CerdasAccessibilityService.isActive() && tapX != null && tapY != null) {
+                        emitTapPulse(tapX, tapY, isNextButton = false)
+                        if (!_uiState.value.isSilumanMode) {
+                            delay(120L)
+                        }
+                        tapped = CerdasAccessibilityService.tapOptionOrPoint(
+                            optionNode = matchedNode,
+                            fallbackX = tapX,
+                            fallbackY = tapY
+                        )
+                    }
+
+                    val statusBadge = buildString {
+                        append(qLabel)
+                        append(" Terjawab (")
+                        append(decision.answerLetter.ifBlank { decision.answerText.take(12) })
+                        append(")")
+                        if (!tapped && !CerdasAccessibilityService.isActive()) {
+                            append(" • Lihat Chat")
+                        }
+                    }
+
+                    _uiState.update {
+                        it.copy(
+                            autoSolvedCount = totalSolved,
+                            lastDetectedQuestionLabel = qLabel,
+                            aiStatusText = statusBadge
+                        )
+                    }
+
+                    showToast(
+                        if (tapped) "Terjawab: ${decision.answerLetter.ifBlank { decision.answerText.take(16) }}"
+                        else "Jawaban: ${decision.answerLetter.ifBlank { decision.answerText.take(24) }}"
+                    )
+
+                    if (mode == AutoSolveMode.SINGLE_QUESTION) {
+                        _uiState.update {
+                            it.copy(
+                                isGenerating = false,
+                                autoSolveMode = AutoSolveMode.IDLE,
+                                isSystemOverlayExpanded = if (fromSystemOverlay) true else it.isSystemOverlayExpanded,
+                                isAiPanelOpen = if (!fromSystemOverlay) true else it.isAiPanelOpen
+                            )
+                        }
+                        break
+                    }
+
+                    // Auto loop pacing wait before advancing to next question
+                    val paceSec = _uiState.value.autoPaceSeconds.coerceIn(2, 60)
+                    for (remaining in paceSec downTo 1) {
+                        _uiState.update {
+                            it.copy(aiStatusText = "$qLabel • Lanjut dlm ${remaining}d")
+                        }
+                        delay(1000L)
+                    }
+
+                    val nextNode = snapshot?.nextButtonNode
+                    val nextX = nextNode?.centerX ?: decision.nextTapXRatio?.let { it * screenW }
+                    val nextY = nextNode?.centerY ?: decision.nextTapYRatio?.let { it * screenH }
+
+                    if (CerdasAccessibilityService.isActive() && nextX != null && nextY != null) {
+                        emitTapPulse(nextX, nextY, isNextButton = true)
+                        if (!_uiState.value.isSilumanMode) {
+                            delay(100L)
+                        }
+                        val nextTapped = CerdasAccessibilityService.tapOptionOrPoint(
+                            optionNode = nextNode,
+                            fallbackX = nextX,
+                            fallbackY = nextY
+                        )
+                        if (!nextTapped) {
+                            _uiState.update {
+                                it.copy(
+                                    isGenerating = false,
+                                    autoSolveMode = AutoSolveMode.IDLE,
+                                    isSystemOverlayExpanded = fromSystemOverlay,
+                                    aiStatusText = "Auto berhenti • Tombol Lanjut tidak aktif"
+                                )
+                            }
+                            break
+                        }
+                        // Wait for next question UI transition
+                        delay(1150L)
+                    } else {
+                        _uiState.update {
+                            it.copy(
+                                isGenerating = false,
+                                autoSolveMode = AutoSolveMode.IDLE,
+                                isSystemOverlayExpanded = fromSystemOverlay,
+                                aiStatusText = "Selesai • Tombol Lanjut tidak ditemukan"
+                            )
+                        }
+                        break
+                    }
+                }
+            } catch (e: CancellationException) {
+                _uiState.update {
+                    it.copy(
+                        isGenerating = false,
+                        isCapturingScreen = false,
+                        autoSolveMode = AutoSolveMode.IDLE,
+                        aiStatusText = "Auto-Jawab dihentikan"
+                    )
+                }
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Auto-Solve failed", e)
+                val errMsg = e.localizedMessage ?: "Gagal menjalankan Auto-Jawab."
+                _uiState.update { state ->
+                    state.copy(
+                        isGenerating = false,
+                        isCapturingScreen = false,
+                        autoSolveMode = AutoSolveMode.IDLE,
+                        isSystemOverlayExpanded = if (fromSystemOverlay) true else state.isSystemOverlayExpanded,
+                        isAiPanelOpen = if (!fromSystemOverlay) true else state.isAiPanelOpen,
+                        aiStatusText = "Error • Auto-Jawab",
+                        chatMessages = state.chatMessages + AiChatMessage(
+                            id = UUID.randomUUID().toString(),
+                            isUser = false,
+                            text = errMsg,
+                            isError = true
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private fun findBestOptionNode(
+        snapshot: ScreenQuizSnapshot?,
+        decision: AutoAnswerDecision
+    ): UiTargetNode? {
+        val nodes = snapshot?.optionNodes ?: return null
+        if (nodes.isEmpty()) return null
+        if (decision.answerLetter.isNotBlank()) {
+            val byLetter = nodes.firstOrNull {
+                it.optionLetter.equals(decision.answerLetter, ignoreCase = true)
+            }
+            if (byLetter != null) return byLetter
+        }
+        val targetText = decision.answerText.trim().lowercase()
+        if (targetText.isNotBlank()) {
+            val byText = nodes.firstOrNull { node ->
+                val nl = node.label.lowercase()
+                nl.contains(targetText) || targetText.contains(nl)
+            }
+            if (byText != null) return byText
+        }
+        return null
+    }
+
+    private fun emitTapPulse(x: Float, y: Float, isNextButton: Boolean) {
+        if (_uiState.value.isSilumanMode) return
+        pulseJob?.cancel()
+        val pulseId = ++lastTapPulseId
+        _uiState.update {
+            it.copy(tapPulseEvent = TapPulseEvent(id = pulseId, x = x, y = y, isNextButton = isNextButton))
+        }
+        pulseJob = scope.launch {
+            delay(650L)
+            if (_uiState.value.tapPulseEvent?.id == pulseId) {
+                _uiState.update { it.copy(tapPulseEvent = null) }
+            }
+        }
+    }
+
+    private fun logAutoSolvedResult(
+        decision: AutoAnswerDecision,
+        qLabel: String,
+        bitmap: Bitmap?
+    ) {
+        val formattedAnswer = buildString {
+            appendLine("> **Jawaban ${qLabel}: ${decision.answerLetter.ifBlank { decision.answerText }}**")
+            if (decision.answerText.isNotBlank()) {
+                appendLine()
+                appendLine("**Opsi Terpilih:** ${decision.answerText}")
+            }
+            if (decision.reason.isNotBlank()) {
+                appendLine()
+                appendLine("### Pembahasan Singkat")
+                appendLine(decision.reason)
+            }
+        }.trim()
+
+        val timeLabel = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val savedItem = SolvedTaskItem(
+            id = UUID.randomUUID().toString(),
+            toolType = TaskToolType.MULTIPLE_CHOICE,
+            promptPreview = decision.questionSummary.ifBlank { qLabel }.take(80),
+            answerText = formattedAnswer,
+            timestampLabel = timeLabel,
+            hasImage = bitmap != null
+        )
+        val msg = AiChatMessage(
+            id = UUID.randomUUID().toString(),
+            isUser = false,
+            text = formattedAnswer
+        )
+        _uiState.update {
+            it.copy(
+                solvedTasks = listOf(savedItem) + it.solvedTasks,
+                chatMessages = it.chatMessages + msg
+            )
+        }
+    }
+
     fun setStealthMode(mode: StealthMode) {
         _uiState.update { state ->
             val antiCapture = if (mode == StealthMode.INVISIBLE) true else state.isAntiCaptureEnabled
@@ -296,7 +694,8 @@ object AiAssistantSession {
         _uiState.update { it.copy(toolError = null) }
     }
 
-    fun showToast(message: String) {
+    fun showToast(message: String, force: Boolean = false) {
+        if (!force && _uiState.value.isSilumanMode) return
         toastJob?.cancel()
         toastJob = scope.launch {
             _uiState.update { it.copy(toastMessage = message) }
@@ -516,10 +915,14 @@ object AiAssistantSession {
     }
 
     fun stopGeneration() {
+        autoSolveJob?.cancel()
         activeStreamJob?.cancel()
         _uiState.update {
             it.copy(
                 isGenerating = false,
+                isCapturingScreen = false,
+                autoSolveMode = AutoSolveMode.IDLE,
+                tapPulseEvent = null,
                 aiStatusText = "Dihentikan oleh pengguna"
             )
         }

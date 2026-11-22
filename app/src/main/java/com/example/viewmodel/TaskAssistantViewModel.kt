@@ -30,6 +30,19 @@ class TaskAssistantViewModel : ViewModel() {
 
     fun toggleQuickAnswerMode() = AiAssistantSession.toggleQuickAnswerMode()
 
+    fun toggleSilumanMode() = AiAssistantSession.toggleSilumanMode()
+
+    fun cycleAutoPace() = AiAssistantSession.cycleAutoPace()
+
+    fun solveSingleScreenQuestion(fromSystemOverlay: Boolean = false) =
+        AiAssistantSession.solveSingleScreenQuestion(fromSystemOverlay)
+
+    fun toggleAutoSolveLoop(targetKkm: Boolean, fromSystemOverlay: Boolean = false) =
+        AiAssistantSession.toggleAutoSolveLoop(targetKkm, fromSystemOverlay)
+
+    fun refreshAccessibilityStatus(context: Context) =
+        AiAssistantSession.refreshAccessibilityStatus(context)
+
     fun setStealthMode(mode: StealthMode) = AiAssistantSession.setStealthMode(mode)
 
     fun cycleStealthMode() = AiAssistantSession.cycleStealthMode()

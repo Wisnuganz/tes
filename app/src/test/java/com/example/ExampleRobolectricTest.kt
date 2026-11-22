@@ -4,8 +4,10 @@ import android.content.Context
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import com.example.ai.GeminiApiKeyStore
+import com.example.model.AutoSolveMode
 import com.example.overlay.FloatingAiOverlayService
 import com.example.session.AiAssistantSession
+import com.example.ui.components.normalizeReadableMathSymbols
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -77,5 +79,28 @@ class ExampleRobolectricTest {
         AiAssistantSession.clearApiKey(context)
         assertFalse(AiAssistantSession.uiState.value.hasCustomApiKey)
         assertEquals("", GeminiApiKeyStore.getApiKey(context))
+    }
+
+    @Test
+    fun `siluman mode and pace cycling update session state cleanly`() {
+        val initialSiluman = AiAssistantSession.uiState.value.isSilumanMode
+        AiAssistantSession.toggleSilumanMode()
+        assertEquals(!initialSiluman, AiAssistantSession.uiState.value.isSilumanMode)
+        AiAssistantSession.toggleSilumanMode()
+        assertEquals(initialSiluman, AiAssistantSession.uiState.value.isSilumanMode)
+
+        val beforePace = AiAssistantSession.uiState.value.autoPaceSeconds
+        AiAssistantSession.cycleAutoPace()
+        assertTrue(AiAssistantSession.uiState.value.autoPaceSeconds != beforePace)
+
+        AiAssistantSession.stopGeneration()
+        assertEquals(AutoSolveMode.IDLE, AiAssistantSession.uiState.value.autoSolveMode)
+    }
+
+    @Test
+    fun `markdown math symbol normalization makes formulas readable`() {
+        val raw = "Hasil dari \\frac{180}{2.5} \\times 1 = 72^2 \\rightarrow 72"
+        val cleaned = normalizeReadableMathSymbols(raw)
+        assertEquals("Hasil dari (180/2.5) × 1 = 72² → 72", cleaned)
     }
 }

@@ -128,6 +128,54 @@ class DirectGeminiRestClient {
         throw lastError ?: IllegalStateException("Gagal terhubung ke Gemini API.")
     }.flowOn(Dispatchers.IO)
 
+    suspend fun generateSingleResponse(
+        apiKey: String,
+        systemPrompt: String,
+        userPrompt: String,
+        attachedBitmap: Bitmap?,
+        temperature: Double = 0.1,
+        jsonResponse: Boolean = true,
+        verifiedHintModel: String = ""
+    ): String = withContext(Dispatchers.IO) {
+        val cleanKey = apiKey.trim()
+        val candidates = buildModelCandidates(preferFast = true, verifiedHintModel = verifiedHintModel)
+        val payload = buildRequestPayload(
+            systemPrompt = systemPrompt,
+            userPrompt = userPrompt,
+            attachedBitmap = attachedBitmap,
+            priorMessages = emptyList(),
+            temperature = temperature,
+            responseMimeType = if (jsonResponse) "application/json" else null
+        )
+
+        var lastError: Exception? = null
+        for (modelName in candidates) {
+            try {
+                val result = callSingleModel(cleanKey, modelName, payload)
+                discoveredFastModel = modelName
+                return@withContext result
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+                val msg = e.message.orEmpty().lowercase()
+                val isAuthOrInvalid = msg.contains("api key not valid") ||
+                    msg.contains("api_key_invalid") ||
+                    msg.contains("permission denied") ||
+                    msg.contains("http 401") ||
+                    msg.contains("http 403")
+                if (isAuthOrInvalid) throw e
+                Log.w(TAG, "Single model $modelName failed (${e.message}), trying fallback...")
+            }
+        }
+
+        val available = fetchAvailableGenerateModels(cleanKey)
+        val discovered = pickPreferredModel(available, preferLite = true)
+        val result = callSingleModel(cleanKey, discovered, payload)
+        discoveredFastModel = discovered
+        result
+    }
+
     private fun buildModelCandidates(preferFast: Boolean, verifiedHintModel: String): List<String> {
         val ordered = linkedSetOf<String>()
         if (preferFast) {
@@ -189,6 +237,43 @@ class DirectGeminiRestClient {
                     }
                 }
             }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun callSingleModel(
+        apiKey: String,
+        modelName: String,
+        payload: String
+    ): String {
+        val cleanModel = modelName.removePrefix("models/")
+        val url = URL("$GEMINI_BASE_URL/models/$cleanModel:generateContent")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 35_000
+            doOutput = true
+            doInput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("x-goog-api-key", apiKey)
+        }
+
+        try {
+            conn.outputStream.use { out ->
+                out.write(payload.toByteArray(Charsets.UTF_8))
+                out.flush()
+            }
+
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val errorBody = conn.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                val parsedMsg = extractApiErrorMessage(errorBody) ?: "HTTP $code"
+                throw IllegalStateException("HTTP $code: $parsedMsg")
+            }
+
+            val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            return extractTextFromSseChunk(body).orEmpty()
         } finally {
             conn.disconnect()
         }
@@ -273,7 +358,9 @@ class DirectGeminiRestClient {
         systemPrompt: String,
         userPrompt: String,
         attachedBitmap: Bitmap?,
-        priorMessages: List<AiChatMessage>
+        priorMessages: List<AiChatMessage>,
+        temperature: Double = 0.2,
+        responseMimeType: String? = null
     ): String {
         val root = JSONObject()
         root.put(
@@ -319,10 +406,12 @@ class DirectGeminiRestClient {
         )
 
         root.put("contents", contents)
-        root.put(
-            "generationConfig",
-            JSONObject().put("temperature", 0.4)
-        )
+        val genConfig = JSONObject()
+            .put("temperature", temperature)
+        if (!responseMimeType.isNullOrBlank()) {
+            genConfig.put("responseMimeType", responseMimeType)
+        }
+        root.put("generationConfig", genConfig)
         return root.toString()
     }
 

@@ -4,4 +4,6 @@
     <string name="ai_model_badge">Gemini 3</string>
     <string name="workspace_title">Asisten Tugas AI</string>
     <string name="workspace_subtitle">Foto soal, tempel teks, atau gunakan panel mengambang untuk mengerjakan tugas dengan cepat.</string>
+    <string name="accessibility_service_label">Cerdas AI Auto-Jawab</string>
+    <string name="accessibility_service_description">Membaca soal di layar dan mengetuk opsi jawaban otomatis saat Anda menekan tombol Jawab Otomatis pada panel mengambang Cerdas AI.</string>
 </resources>

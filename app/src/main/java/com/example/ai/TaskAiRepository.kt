@@ -3,6 +3,7 @@ package com.example.ai
 import android.graphics.Bitmap
 import android.util.Log
 import com.example.model.AiChatMessage
+import com.example.model.AutoAnswerDecision
 import com.example.model.TaskToolType
 import com.google.firebase.Firebase
 import com.google.firebase.ai.GenerativeModel
@@ -16,14 +17,23 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
 
 private const val TAG = "TaskAiRepository"
 private const val PRIMARY_MODEL_NAME = "gemini-3.8-flash"
 private const val FALLBACK_MODEL_NAME = "gemini-3.5-flash-lite"
 
 private const val SYSTEM_PROMPT =
-    "Anda adalah Cerdas AI, asisten pintar berbahasa Indonesia untuk membantu pelajar dan mahasiswa mengerjakan tugas sekolah, PR, latihan soal, ringkasan materi, dan esai. " +
-        "Berikan jawaban yang akurat, mudah dipahami, terstruktur rapi tanpa bertele-tele."
+    "Anda adalah Cerdas AI, asisten belajar & pengerjaan tugas berbahasa Indonesia yang sangat akurat dan rapi seperti ChatGPT. " +
+        "Aturan WAJIB untuk akurasi dan gaya penulisan:\n" +
+        "1. Verifikasi ulang setiap perhitungan matematika, logika, sains, dan fakta secara cermat sebelum menuliskan jawaban agar hasilnya tepat.\n" +
+        "2. Tulis dengan gaya rapi ala ChatGPT: mulai baris pertama dengan kotak ringkas `> **Jawaban: ...**`, lalu lanjutkan dengan subjudul singkat seperti `### Pembahasan` dan daftar bernomor (`1.`, `2.`, `3.`) atau poin (`- `).\n" +
+        "3. Gunakan **huruf tebal** untuk angka akhir, pilihan yang benar, atau istilah kunci. Beri jeda antar paragraf agar nyaman dibaca.\n" +
+        "4. JANGAN menulis sintaks LaTeX mentah yang membingungkan seperti '\\frac' atau pembatas dolar; gunakan simbol bersih seperti '×', '÷', '/', '√', '²', '=', dan '°'."
+
+private const val AUTO_TAP_SYSTEM_PROMPT =
+    "Anda adalah mesin pemecah soal ujian akurat yang hanya merespons JSON valid tanpa teks tambahan. " +
+        "Analisis soal secara teliti, cek ulang hitungan matematika/logika sebelum memilih jawaban."
 
 class TaskAiRepository {
 
@@ -205,9 +215,9 @@ class TaskAiRepository {
         quickAnswerMode: Boolean
     ): Flow<String> = flow {
         val styleRule = if (quickAnswerMode) {
-            "Mode Jawaban Cepat AKTIF: Langsung berikan jawaban inti secara singkat, padat, dan jelas."
+            "Mode Cepat AKTIF: Awali dengan `> **Jawaban: ...**`, lalu beri maksimal 2-3 poin alasan paling inti secara jelas dan akurat."
         } else {
-            "Mode Penjelasan Lengkap: Berikan jawaban final di awal, lalu sertakan langkah penyelesaian yang jelas dan mudah diikuti."
+            "Mode Lengkap AKTIF: Awali dengan `> **Jawaban: ...**`, lalu buat `### Pembahasan` dengan langkah bernomor 1, 2, 3 yang rapi seperti ChatGPT."
         }
 
         val taskDirective = when (toolType) {
@@ -319,6 +329,129 @@ class TaskAiRepository {
         } catch (e: Exception) {
             throw mapFriendlyAiException(e)
         }
+    }
+
+    suspend fun solveQuestionForAutoTap(
+        screenText: String,
+        optionDescriptions: List<String>,
+        attachedBitmap: Bitmap?,
+        preferNaturalMissForKkm: Boolean
+    ): AutoAnswerDecision {
+        val scaledBitmap = attachedBitmap?.let { downscaleBitmapIfNeeded(it, maxDimension = 1280) }
+        val kkmInstruction = if (preferNaturalMissForKkm) {
+            "PERHATIAN MODE KKM NATURAL (~80%): Untuk soal INI saja, pilih satu opsi pengecoh yang cukup masuk akal (BUKAN opsi yang benar) agar skor tetap terlihat natural ~80%. Jelaskan singkat di 'reason' bahwa ini penyesuaian KKM."
+        } else {
+            "Pilih jawaban yang 100% PALING BENAR setelah mengecek ulang hitungan dan logika soal."
+        }
+
+        val prompt = buildString {
+            appendLine("Baca soal yang sedang tampil di layar aplikasi kuis/ujian ini.")
+            appendLine(kkmInstruction)
+            if (screenText.isNotBlank()) {
+                appendLine("\nTeks yang terbaca di layar:")
+                appendLine(screenText.take(2800))
+            }
+            if (optionDescriptions.isNotEmpty()) {
+                appendLine("\nDaftar tombol opsi & koordinat layar (rasio 0.0 - 1.0):")
+                optionDescriptions.forEach { appendLine(it) }
+            }
+            appendLine(
+                """
+                
+                Kembalikan HANYA JSON valid dengan format persis berikut:
+                {
+                  "questionNumber": "Soal No. 1",
+                  "questionSummary": "Ringkasan singkat isi soal",
+                  "answerLetter": "B",
+                  "answerText": "Teks pilihan yang dipilih",
+                  "reason": "Penjelasan singkat mengapa jawaban ini benar (1-2 kalimat)",
+                  "answerTapXRatio": 0.5,
+                  "answerTapYRatio": 0.45,
+                  "nextTapXRatio": 0.72,
+                  "nextTapYRatio": 0.85
+                }
+                Catatan: isi answerLetter hanya 1 huruf kapital A/B/C/D/E jika ada pilihan huruf, dan isi answerTapXRatio/answerTapYRatio dengan estimasi titik tengah opsi terpilih (0.0-1.0) serta nextTapXRatio/nextTapYRatio untuk tombol Soal Selanjutnya/Berikutnya (atau null jika tidak terlihat).
+                """.trimIndent()
+            )
+        }
+
+        val customApiKey = GeminiApiKeyStore.getApiKey()
+        val rawResponse = try {
+            if (customApiKey.isNotBlank()) {
+                withTimeout(35_000L) {
+                    directClient.generateSingleResponse(
+                        apiKey = customApiKey,
+                        systemPrompt = AUTO_TAP_SYSTEM_PROMPT,
+                        userPrompt = prompt,
+                        attachedBitmap = scaledBitmap,
+                        temperature = 0.1,
+                        jsonResponse = true,
+                        verifiedHintModel = GeminiApiKeyStore.getVerifiedModel()
+                    )
+                }
+            } else {
+                val contentReq = content {
+                    if (scaledBitmap != null) {
+                        image(scaledBitmap)
+                    }
+                    text("$AUTO_TAP_SYSTEM_PROMPT\n\n$prompt")
+                }
+                val sb = StringBuilder()
+                withTimeout(35_000L) {
+                    primaryModel.generateContentStream(contentReq).collect { chunk ->
+                        chunk.text?.let { sb.append(it) }
+                    }
+                }
+                sb.toString()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw mapFriendlyAiException(e)
+        }
+
+        return parseAutoAnswerDecision(rawResponse)
+    }
+
+    private fun parseAutoAnswerDecision(raw: String): AutoAnswerDecision {
+        val cleaned = raw.trim()
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        val startIdx = cleaned.indexOf('{')
+        val endIdx = cleaned.lastIndexOf('}')
+        val jsonSlice = if (startIdx >= 0 && endIdx > startIdx) {
+            cleaned.substring(startIdx, endIdx + 1)
+        } else {
+            throw IllegalStateException("AI tidak mengembalikan format jawaban otomatis yang valid.")
+        }
+
+        val obj = JSONObject(jsonSlice)
+        val letter = obj.optString("answerLetter", "")
+            .trim()
+            .uppercase()
+            .firstOrNull { it in 'A'..'E' }
+            ?.toString()
+            .orEmpty()
+
+        fun optFloat(key: String): Float? {
+            if (!obj.has(key) || obj.isNull(key)) return null
+            val v = obj.optDouble(key, Double.NaN)
+            return if (v.isNaN() || v <= 0.0 || v >= 1.0) null else v.toFloat()
+        }
+
+        return AutoAnswerDecision(
+            questionNumber = obj.optString("questionNumber", "Soal Aktif").ifBlank { "Soal Aktif" },
+            questionSummary = obj.optString("questionSummary", "").trim(),
+            answerLetter = letter,
+            answerText = obj.optString("answerText", "").trim(),
+            reason = obj.optString("reason", "").trim(),
+            answerTapXRatio = optFloat("answerTapXRatio"),
+            answerTapYRatio = optFloat("answerTapYRatio"),
+            nextTapXRatio = optFloat("nextTapXRatio"),
+            nextTapYRatio = optFloat("nextTapYRatio")
+        )
     }
 
     private fun downscaleBitmapIfNeeded(bitmap: Bitmap, maxDimension: Int = 1600): Bitmap {

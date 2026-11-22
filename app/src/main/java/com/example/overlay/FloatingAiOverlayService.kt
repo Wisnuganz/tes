@@ -62,9 +62,11 @@ import com.example.R
 import com.example.firebase.configureAppCheck
 import com.example.model.AiPanelTab
 import com.example.model.StealthMode
+import com.example.model.TapPulseEvent
 import com.example.session.AiAssistantSession
 import com.example.ui.components.AiKnotOrbIcon
 import com.example.ui.overlay.AiPanelCardContent
+import com.example.ui.theme.AiBlue
 import com.example.ui.theme.AiEmerald
 import com.example.ui.theme.AiEmeraldBright
 import com.example.ui.theme.CerdasCbtTheme
@@ -124,6 +126,7 @@ class FloatingAiOverlayService : Service() {
         const val ACTION_SCAN_SCREEN = "com.example.overlay.ACTION_SCAN_SCREEN"
         const val EXTRA_PICK_PHOTO_FOR_TOOL = "extra_pick_photo_for_tool"
         const val EXTRA_REQUEST_LIVE_SCREEN = "extra_request_live_screen"
+        const val EXTRA_OPEN_ACCESSIBILITY_SETTINGS = "extra_open_accessibility_settings"
     }
 
     private lateinit var windowManager: WindowManager
@@ -132,11 +135,14 @@ class FloatingAiOverlayService : Service() {
 
     private var bubbleView: ComposeView? = null
     private var panelView: ComposeView? = null
+    private var tapPulseView: ComposeView? = null
     private var bubbleParams: WindowManager.LayoutParams? = null
     private var panelParams: WindowManager.LayoutParams? = null
+    private var tapPulseParams: WindowManager.LayoutParams? = null
     private var lastAppliedExpanded: Boolean? = null
     private var lastAppliedCapturing: Boolean? = null
     private var lastAppliedSecure: Boolean? = null
+    private var lastAppliedPulseId: Long? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -202,6 +208,10 @@ class FloatingAiOverlayService : Service() {
                 syncWindowVisibilityAndFlags(
                     expanded = state.isSystemOverlayExpanded,
                     capturing = state.isCapturingScreen,
+                    secure = state.isAntiCaptureEnabled || state.stealthMode == StealthMode.INVISIBLE
+                )
+                syncTapPulseIndicator(
+                    pulse = if (state.isSilumanMode) null else state.tapPulseEvent,
                     secure = state.isAntiCaptureEnabled || state.stealthMode == StealthMode.INVISIBLE
                 )
             }
@@ -451,6 +461,20 @@ class FloatingAiOverlayService : Service() {
                             },
                             onClearApiKey = {
                                 AiAssistantSession.clearApiKey(this@FloatingAiOverlayService)
+                            },
+                            onToggleSilumanMode = AiAssistantSession::toggleSilumanMode,
+                            onCycleAutoPace = AiAssistantSession::cycleAutoPace,
+                            onSolveSingleQuestion = {
+                                AiAssistantSession.solveSingleScreenQuestion(fromSystemOverlay = true)
+                            },
+                            onToggleAutoSolve = { targetKkm ->
+                                AiAssistantSession.toggleAutoSolveLoop(
+                                    targetKkm = targetKkm,
+                                    fromSystemOverlay = true
+                                )
+                            },
+                            onOpenAccessibilitySettings = {
+                                launchMainActivityForAccessibilitySettings()
                             }
                         )
                     }
@@ -459,9 +483,53 @@ class FloatingAiOverlayService : Service() {
         }
         panelView = pView
 
+        val pulsePx = (64 * density).roundToInt()
+        val pulseLp = WindowManager.LayoutParams(
+            pulsePx,
+            pulsePx,
+            overlayWindowType(),
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+        }
+        tapPulseParams = pulseLp
+
+        val pulseView = ComposeView(themedContext).apply {
+            visibility = View.GONE
+            setViewTreeLifecycleOwner(lifecycleOwner)
+            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+            setViewTreeViewModelStoreOwner(lifecycleOwner)
+            setViewCompositionStrategy(
+                ViewCompositionStrategy.DisposeOnLifecycleDestroyed(lifecycleOwner)
+            )
+            setContent {
+                CerdasCbtTheme {
+                    val state by AiAssistantSession.uiState.collectAsStateWithLifecycle()
+                    val isNext = state.tapPulseEvent?.isNextButton == true
+                    val ringColor = if (isNext) AiBlue else AiEmerald
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(4.dp)
+                            .clip(CircleShape)
+                            .background(ringColor.copy(alpha = 0.24f))
+                            .border(3.dp, ringColor, CircleShape)
+                    )
+                }
+            }
+        }
+        tapPulseView = pulseView
+
         return try {
             windowManager.addView(bView, bParams)
             windowManager.addView(pView, pParams)
+            windowManager.addView(pulseView, pulseLp)
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed adding overlay views to WindowManager", e)
@@ -475,6 +543,9 @@ class FloatingAiOverlayService : Service() {
             } catch (_: Exception) {}
             try {
                 if (pView.isAttachedToWindow) windowManager.removeViewImmediate(pView)
+            } catch (_: Exception) {}
+            try {
+                if (pulseView.isAttachedToWindow) windowManager.removeViewImmediate(pulseView)
             } catch (_: Exception) {}
             false
         }
@@ -520,6 +591,61 @@ class FloatingAiOverlayService : Service() {
                 "Buka Cerdas AI untuk memilih foto soal (atau izinkan pop-up latar belakang).",
                 Toast.LENGTH_LONG
             ).show()
+        }
+    }
+
+    private fun launchMainActivityForAccessibilitySettings() {
+        AiAssistantSession.setSystemOverlayExpanded(false)
+        val settingsIntent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            startActivity(settingsIntent)
+            return
+        } catch (_: Exception) {}
+
+        val fallbackIntent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(EXTRA_OPEN_ACCESSIBILITY_SETTINGS, true)
+        }
+        try {
+            startActivity(fallbackIntent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed opening Accessibility Settings", e)
+            Toast.makeText(
+                this,
+                "Buka Setelan > Aksesibilitas > Cerdas AI Auto-Jawab untuk mengaktifkan Auto-Tap.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun syncTapPulseIndicator(pulse: TapPulseEvent?, secure: Boolean) {
+        val view = tapPulseView ?: return
+        val lp = tapPulseParams ?: return
+        if (pulse == null) {
+            if (lastAppliedPulseId != null) {
+                lastAppliedPulseId = null
+                view.visibility = View.GONE
+            }
+            return
+        }
+        if (lastAppliedPulseId == pulse.id) return
+        lastAppliedPulseId = pulse.id
+
+        val pulsePx = (64 * resources.displayMetrics.density).roundToInt()
+        lp.x = (pulse.x - pulsePx / 2f).roundToInt()
+        lp.y = (pulse.y - pulsePx / 2f).roundToInt()
+        val baseFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        lp.flags = if (secure) baseFlags or WindowManager.LayoutParams.FLAG_SECURE else baseFlags
+        view.visibility = View.VISIBLE
+        if (view.isAttachedToWindow) {
+            try {
+                windowManager.updateViewLayout(view, lp)
+            } catch (_: Exception) {}
         }
     }
 
@@ -655,6 +781,11 @@ class FloatingAiOverlayService : Service() {
             }
         }
         panelView?.let {
+            if (it.isAttachedToWindow) {
+                try { windowManager.removeViewImmediate(it) } catch (_: Exception) {}
+            }
+        }
+        tapPulseView?.let {
             if (it.isAttachedToWindow) {
                 try { windowManager.removeViewImmediate(it) } catch (_: Exception) {}
             }

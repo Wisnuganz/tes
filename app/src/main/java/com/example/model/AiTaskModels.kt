@@ -7,6 +7,13 @@ enum class AiPanelTab {
     CHAT
 }
 
+enum class AutoSolveMode(val label: String) {
+    IDLE("Siap"),
+    SINGLE_QUESTION("Jawab 1 Soal"),
+    AUTO_100("Auto Nilai 100"),
+    AUTO_KKM_80("Auto Aman KKM")
+}
+
 enum class StealthMode(
     val label: String,
     val badge: String,
@@ -89,17 +96,43 @@ data class AiChatMessage(
     val attachedBitmap: Bitmap? = null
 )
 
+data class TapPulseEvent(
+    val id: Long,
+    val x: Float,
+    val y: Float,
+    val isNextButton: Boolean = false
+)
+
+data class AutoAnswerDecision(
+    val questionNumber: String,
+    val questionSummary: String,
+    val answerLetter: String,
+    val answerText: String,
+    val reason: String,
+    val answerTapXRatio: Float? = null,
+    val answerTapYRatio: Float? = null,
+    val nextTapXRatio: Float? = null,
+    val nextTapYRatio: Float? = null
+)
+
 data class TaskAssistantUiState(
     val isAiPanelOpen: Boolean = false,
     val isSystemOverlayExpanded: Boolean = false,
     val hasOverlayPermission: Boolean = false,
     val isOverlayServiceRunning: Boolean = false,
     val isLiveScreenActive: Boolean = false,
+    val isAccessibilityEnabled: Boolean = false,
     val isCapturingScreen: Boolean = false,
     val activeAiTab: AiPanelTab = AiPanelTab.CHAT,
-    val isQuickAnswerMode: Boolean = true,
+    val isQuickAnswerMode: Boolean = false,
+    val isSilumanMode: Boolean = false,
     val stealthMode: StealthMode = StealthMode.NORMAL,
     val isAntiCaptureEnabled: Boolean = false,
+    val autoSolveMode: AutoSolveMode = AutoSolveMode.IDLE,
+    val autoPaceSeconds: Int = 5,
+    val autoSolvedCount: Int = 0,
+    val lastDetectedQuestionLabel: String = "",
+    val tapPulseEvent: TapPulseEvent? = null,
     val aiStatusText: String = "Siap • Tugas AI Engine",
     val activeToolInputDialog: TaskToolType? = null,
     val pendingToolText: String = "",

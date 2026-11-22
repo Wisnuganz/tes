@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
 
     private var pendingPhotoPickerForOverlay = false
     private var pendingLiveScreenPermissionRequest = false
+    private var pendingAccessibilitySettingsRequest = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,8 +69,10 @@ class MainActivity : ComponentActivity() {
                 TaskAssistantApp(
                     initialPickPhotoRequest = pendingPhotoPickerForOverlay,
                     initialLiveScreenRequest = pendingLiveScreenPermissionRequest,
+                    initialAccessibilityRequest = pendingAccessibilitySettingsRequest,
                     onConsumePhotoRequest = { pendingPhotoPickerForOverlay = false },
                     onConsumeLiveScreenRequest = { pendingLiveScreenPermissionRequest = false },
+                    onConsumeAccessibilityRequest = { pendingAccessibilitySettingsRequest = false },
                     onApplySecureWindow = { secure ->
                         if (secure) {
                             window.setFlags(
@@ -100,6 +103,10 @@ class MainActivity : ComponentActivity() {
             pendingLiveScreenPermissionRequest = true
             intent.removeExtra(FloatingAiOverlayService.EXTRA_REQUEST_LIVE_SCREEN)
         }
+        if (intent?.hasExtra(FloatingAiOverlayService.EXTRA_OPEN_ACCESSIBILITY_SETTINGS) == true) {
+            pendingAccessibilitySettingsRequest = true
+            intent.removeExtra(FloatingAiOverlayService.EXTRA_OPEN_ACCESSIBILITY_SETTINGS)
+        }
     }
 }
 
@@ -107,8 +114,10 @@ class MainActivity : ComponentActivity() {
 fun TaskAssistantApp(
     initialPickPhotoRequest: Boolean,
     initialLiveScreenRequest: Boolean,
+    initialAccessibilityRequest: Boolean,
     onConsumePhotoRequest: () -> Unit,
     onConsumeLiveScreenRequest: () -> Unit,
+    onConsumeAccessibilityRequest: () -> Unit,
     onApplySecureWindow: (Boolean) -> Unit,
     viewModel: TaskAssistantViewModel = viewModel()
 ) {
@@ -162,6 +171,14 @@ fun TaskAssistantApp(
         mediaProjectionLauncher.launch(manager.createScreenCaptureIntent())
     }
 
+    val openAccessibilitySettings: () -> Unit = {
+        try {
+            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        } catch (_: Exception) {
+            viewModel.showToast("Buka Setelan > Aksesibilitas > Cerdas AI Auto-Jawab")
+        }
+    }
+
     LaunchedEffect(initialPickPhotoRequest) {
         if (initialPickPhotoRequest) {
             onConsumePhotoRequest()
@@ -178,6 +195,13 @@ fun TaskAssistantApp(
         }
     }
 
+    LaunchedEffect(initialAccessibilityRequest) {
+        if (initialAccessibilityRequest) {
+            onConsumeAccessibilityRequest()
+            openAccessibilitySettings()
+        }
+    }
+
     LaunchedEffect(Unit) {
         warmUpAppCheckTokenIfNeeded()
     }
@@ -190,6 +214,7 @@ fun TaskAssistantApp(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.setOverlayPermission(Settings.canDrawOverlays(context))
+                viewModel.refreshAccessibilityStatus(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -253,7 +278,8 @@ fun TaskAssistantApp(
             onDeleteTask = viewModel::deleteSolvedTask,
             onCopySuccess = viewModel::showToast,
             onSaveApiKey = { key -> viewModel.saveAndTestApiKey(context, key) },
-            onClearApiKey = { viewModel.clearApiKey(context) }
+            onClearApiKey = { viewModel.clearApiKey(context) },
+            onOpenAccessibilitySettings = openAccessibilitySettings
         )
 
         DraggableFloatingAiBubble(
@@ -293,7 +319,14 @@ fun TaskAssistantApp(
             },
             onRetryLastPrompt = viewModel::retryLastUserPrompt,
             onSaveApiKey = { key -> viewModel.saveAndTestApiKey(context, key) },
-            onClearApiKey = { viewModel.clearApiKey(context) }
+            onClearApiKey = { viewModel.clearApiKey(context) },
+            onToggleSilumanMode = viewModel::toggleSilumanMode,
+            onCycleAutoPace = viewModel::cycleAutoPace,
+            onSolveSingleQuestion = { viewModel.solveSingleScreenQuestion(fromSystemOverlay = false) },
+            onToggleAutoSolve = { targetKkm ->
+                viewModel.toggleAutoSolveLoop(targetKkm = targetKkm, fromSystemOverlay = false)
+            },
+            onOpenAccessibilitySettings = openAccessibilitySettings
         )
     }
 }
