@@ -38,9 +38,25 @@ class ExampleRobolectricTest {
                 action = FloatingAiOverlayService.ACTION_START
             }
         )
-        controller.create().startCommand(0, 0).get()
+        val service = controller.create().startCommand(0, 0).get()
         assertEquals(true, AiAssistantSession.uiState.value.isOverlayServiceRunning)
         AiAssistantSession.setSystemOverlayExpanded(true)
+        val defaultFlags = service.currentPanelWindowFlagsForTest() ?: 0
+        assertTrue(
+            "Panel must default to FLAG_NOT_FOCUSABLE so underlying apps keep window focus",
+            (defaultFlags and android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) != 0
+        )
+        service.setPanelInputFocused(true)
+        val typingFlags = service.currentPanelWindowFlagsForTest() ?: 0
+        assertEquals(
+            0,
+            typingFlags and android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        )
+        service.setPanelInputFocused(false)
+        val restoredFlags = service.currentPanelWindowFlagsForTest() ?: 0
+        assertTrue(
+            (restoredFlags and android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) != 0
+        )
         AiAssistantSession.setSystemOverlayExpanded(false)
         controller.destroy()
         assertEquals(false, AiAssistantSession.uiState.value.isOverlayServiceRunning)

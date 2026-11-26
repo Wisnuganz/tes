@@ -209,8 +209,12 @@ class CerdasAccessibilityService : AccessibilityService() {
             }
         }
 
+        var visitedNodes = 0
+        val maxVisitedNodes = 650
+
         fun traverse(node: AccessibilityNodeInfo?, parentClickable: Boolean, depth: Int) {
-            if (node == null || depth > 110 || !node.isVisibleToUser) return
+            if (node == null || depth > 110 || visitedNodes >= maxVisitedNodes || !node.isVisibleToUser) return
+            visitedNodes++
 
             val rect = Rect()
             node.getBoundsInScreen(rect)
@@ -474,8 +478,10 @@ class CerdasAccessibilityService : AccessibilityService() {
 
     private fun tryNodeClick(target: UiTargetNode): Boolean {
         val roots = collectTargetWindowRoots()
+        var visited = 0
         fun searchAndClick(node: AccessibilityNodeInfo?, depth: Int): Boolean {
-            if (node == null || depth > 110) return false
+            if (node == null || depth > 110 || visited >= 650) return false
+            visited++
             val rect = Rect()
             node.getBoundsInScreen(rect)
             if (rect == target.bounds) {

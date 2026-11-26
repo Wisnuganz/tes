@@ -13,6 +13,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -81,6 +83,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -89,13 +92,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
@@ -291,10 +299,25 @@ fun AiPanelCardContent(
     onCycleAutoPace: (() -> Unit)? = null,
     onSolveSingleQuestion: (() -> Unit)? = null,
     onToggleAutoSolve: ((targetKkm: Boolean) -> Unit)? = null,
-    onOpenAccessibilitySettings: (() -> Unit)? = null
+    onOpenAccessibilitySettings: (() -> Unit)? = null,
+    onInputFocusChange: ((Boolean) -> Unit)? = null
 ) {
     val clipboardManager = LocalClipboardManager.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var chatInputText by remember { mutableStateOf("") }
+
+    val releaseInputFocus: () -> Unit = {
+        focusManager.clearFocus(force = true)
+        keyboardController?.hide()
+        onInputFocusChange?.invoke(false)
+    }
+
+    DisposableEffect(onInputFocusChange) {
+        onDispose {
+            onInputFocusChange?.invoke(false)
+        }
+    }
 
     Surface(
         shape = RoundedCornerShape(22.dp),
@@ -333,6 +356,7 @@ fun AiPanelCardContent(
                 ) {
                     IconButton(
                         onClick = {
+                            releaseInputFocus()
                             onSelectTab(
                                 if (state.activeAiTab == AiPanelTab.TOOLS) AiPanelTab.CHAT else AiPanelTab.TOOLS
                             )
@@ -392,6 +416,7 @@ fun AiPanelCardContent(
                     }
                     IconButton(
                         onClick = {
+                            releaseInputFocus()
                             onNewChat()
                             onSelectTab(AiPanelTab.CHAT)
                         },
@@ -407,7 +432,10 @@ fun AiPanelCardContent(
                         )
                     }
                     IconButton(
-                        onClick = onClose,
+                        onClick = {
+                            releaseInputFocus()
+                            onClose()
+                        },
                         modifier = Modifier
                             .size(38.dp)
                             .testTag("ai_close_button")
@@ -469,13 +497,19 @@ fun AiPanelCardContent(
                         SegmentedTabChip(
                             label = "Tools",
                             selected = state.activeAiTab == AiPanelTab.TOOLS,
-                            onClick = { onSelectTab(AiPanelTab.TOOLS) },
+                            onClick = {
+                                releaseInputFocus()
+                                onSelectTab(AiPanelTab.TOOLS)
+                            },
                             tag = "tab_tools"
                         )
                         SegmentedTabChip(
                             label = "Chat",
                             selected = state.activeAiTab == AiPanelTab.CHAT,
-                            onClick = { onSelectTab(AiPanelTab.CHAT) },
+                            onClick = {
+                                releaseInputFocus()
+                                onSelectTab(AiPanelTab.CHAT)
+                            },
                             tag = "tab_chat"
                         )
                     }
@@ -519,7 +553,10 @@ fun AiPanelCardContent(
                             isGenerating = state.isGenerating,
                             liveOutput = state.liveToolOutput,
                             errorText = state.toolError,
-                            onBack = onCloseToolInput,
+                            onBack = {
+                                releaseInputFocus()
+                                onCloseToolInput()
+                            },
                             onTextChange = onUpdatePendingToolText,
                             onPasteClipboard = {
                                 val clip = clipboardManager.getText()?.text.orEmpty()
@@ -527,13 +564,23 @@ fun AiPanelCardContent(
                                     onUpdatePendingToolText(clip)
                                 }
                             },
-                            onPickGallery = { onPickPhotoFromGallery(true) },
-                            onTakePhoto = onTakePhotoFromCamera,
+                            onPickGallery = {
+                                releaseInputFocus()
+                                onPickPhotoFromGallery(true)
+                            },
+                            onTakePhoto = {
+                                releaseInputFocus()
+                                onTakePhotoFromCamera()
+                            },
                             onRemoveBitmap = { onUpdatePendingToolBitmap(null) },
-                            onSolve = onRunActiveTool,
+                            onSolve = {
+                                releaseInputFocus()
+                                onRunActiveTool()
+                            },
                             onStop = onStopGeneration,
                             onClearError = onClearError,
-                            onCopyOutput = { onCopyText(state.liveToolOutput) }
+                            onCopyOutput = { onCopyText(state.liveToolOutput) },
+                            onInputFocusChange = onInputFocusChange
                         )
                     } else {
                         AiHomeworkToolsGrid(
@@ -541,16 +588,32 @@ fun AiPanelCardContent(
                             onToggleQuickAnswerMode = onToggleQuickAnswerMode,
                             onSelectStealthMode = onSelectStealthMode,
                             onToggleAntiCapture = onToggleAntiCapture,
-                            onOpenTool = onOpenToolInput,
-                            onScanScreen = onScanScreen,
+                            onOpenTool = { tool ->
+                                releaseInputFocus()
+                                onOpenToolInput(tool)
+                            },
+                            onScanScreen = {
+                                releaseInputFocus()
+                                onScanScreen?.invoke()
+                            },
                             onStopGeneration = onStopGeneration,
-                            onSaveApiKey = onSaveApiKey,
+                            onSaveApiKey = { key ->
+                                releaseInputFocus()
+                                onSaveApiKey?.invoke(key)
+                            },
                             onClearApiKey = onClearApiKey,
                             onToggleSilumanMode = onToggleSilumanMode,
                             onCycleAutoPace = onCycleAutoPace,
-                            onSolveSingleQuestion = onSolveSingleQuestion,
-                            onToggleAutoSolve = onToggleAutoSolve,
-                            onOpenAccessibilitySettings = onOpenAccessibilitySettings
+                            onSolveSingleQuestion = {
+                                releaseInputFocus()
+                                onSolveSingleQuestion?.invoke()
+                            },
+                            onToggleAutoSolve = { targetKkm ->
+                                releaseInputFocus()
+                                onToggleAutoSolve?.invoke(targetKkm)
+                            },
+                            onOpenAccessibilitySettings = onOpenAccessibilitySettings,
+                            onInputFocusChange = onInputFocusChange
                         )
                     }
                 } else {
@@ -686,6 +749,7 @@ fun AiPanelCardContent(
                             },
                             modifier = Modifier
                                 .weight(1f)
+                                .overlayTextInputFocus(onInputFocusChange)
                                 .testTag("ai_chat_input")
                         )
 
@@ -698,6 +762,7 @@ fun AiPanelCardContent(
                                     val bmpToSend = externalChatAttachedBitmap
                                     chatInputText = ""
                                     onClearExternalChatBitmap()
+                                    releaseInputFocus()
                                     onSendChat(textToSend, bmpToSend)
                                 }
                             },
@@ -762,7 +827,8 @@ private fun AiHomeworkToolsGrid(
     onCycleAutoPace: (() -> Unit)? = null,
     onSolveSingleQuestion: (() -> Unit)? = null,
     onToggleAutoSolve: ((targetKkm: Boolean) -> Unit)? = null,
-    onOpenAccessibilitySettings: (() -> Unit)? = null
+    onOpenAccessibilitySettings: (() -> Unit)? = null,
+    onInputFocusChange: ((Boolean) -> Unit)? = null
 ) {
     val clipboardManager = LocalClipboardManager.current
     var showApiKeyEditor by remember(state.hasCustomApiKey) {
@@ -1156,6 +1222,7 @@ private fun AiHomeworkToolsGrid(
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .overlayTextInputFocus(onInputFocusChange)
                                 .testTag("overlay_api_key_input")
                         )
 
@@ -1619,7 +1686,8 @@ private fun ActiveToolSolverPane(
     onSolve: () -> Unit,
     onStop: () -> Unit,
     onClearError: () -> Unit,
-    onCopyOutput: () -> Unit
+    onCopyOutput: () -> Unit,
+    onInputFocusChange: ((Boolean) -> Unit)? = null
 ) {
     Column(
         modifier = Modifier
@@ -1787,6 +1855,7 @@ private fun ActiveToolSolverPane(
             ),
             modifier = Modifier
                 .fillMaxWidth()
+                .overlayTextInputFocus(onInputFocusChange)
                 .testTag("tool_solver_input")
         )
 
@@ -2005,7 +2074,7 @@ private fun AiChatTabContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 220.dp, max = 340.dp)
+            .heightIn(min = 120.dp, max = 340.dp)
     ) {
         Row(
             modifier = Modifier
@@ -2272,4 +2341,32 @@ private fun ChatBubbleItem(
             }
         }
     }
+}
+
+@Composable
+private fun Modifier.overlayTextInputFocus(
+    onInputFocusChange: ((Boolean) -> Unit)?
+): Modifier {
+    if (onInputFocusChange == null) return this
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val isWindowFocused = LocalWindowInfo.current.isWindowFocused
+    var fieldFocused by remember { mutableStateOf(false) }
+
+    LaunchedEffect(fieldFocused, isWindowFocused) {
+        if (fieldFocused && isWindowFocused) {
+            keyboardController?.show()
+        }
+    }
+
+    return this
+        .pointerInput(onInputFocusChange) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                onInputFocusChange(true)
+            }
+        }
+        .onFocusChanged { focusState ->
+            fieldFocused = focusState.isFocused
+            onInputFocusChange(focusState.isFocused)
+        }
 }

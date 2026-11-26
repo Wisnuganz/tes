@@ -744,6 +744,50 @@ fun TaskWorkspaceScreen(
                                 }
                             }
 
+                            // Anti-Force-Close / Penghemat Baterai guide (especially for Xiaomi MIUI / HyperOS when opening WA)
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = CbtSubtleSurface,
+                                border = BorderStroke(1.dp, CbtCardBorder),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = onOpenAppInfoSettings)
+                                    .testTag("workspace_battery_keepalive_card")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(end = 8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            text = "Anti-Mati Saat Buka WA / App Berat",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = CbtTextPrimary
+                                        )
+                                        Text(
+                                            text = "Ketuk untuk atur Info Aplikasi -> Penghemat baterai: Tidak ada pembatasan & izinkan Mulai otomatis / Pop-up latar belakang.",
+                                            fontSize = 11.sp,
+                                            lineHeight = 15.sp,
+                                            color = CbtTextSecondary
+                                        )
+                                    }
+                                    Text(
+                                        text = "ATUR",
+                                        color = CbtRoyalBlue,
+                                        fontFamily = JetBrainsMonoFontFamily,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
                             if (state.isLiveScreenActive) {
                                 OutlinedButton(
                                     onClick = onScanScreenNow,

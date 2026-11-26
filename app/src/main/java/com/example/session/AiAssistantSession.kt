@@ -964,12 +964,13 @@ object AiAssistantSession {
         }
 
         val historySnapshot = _uiState.value.chatMessages
+        val previewThumb = attachedBitmap?.let { downscaleThumbnail(it, maxDim = 480) }
 
         val userMsg = AiChatMessage(
             id = UUID.randomUUID().toString(),
             isUser = true,
             text = effectivePrompt,
-            attachedBitmap = attachedBitmap
+            attachedBitmap = previewThumb
         )
         val modelMsgId = UUID.randomUUID().toString()
         val aiPlaceholder = AiChatMessage(
@@ -979,12 +980,13 @@ object AiAssistantSession {
             isStreaming = true
         )
 
-        _uiState.update {
-            it.copy(
+        _uiState.update { state ->
+            val compactedHistory = trimOldChatBitmaps(state.chatMessages, keepCount = 2)
+            state.copy(
                 activeAiTab = AiPanelTab.CHAT,
                 isGenerating = true,
                 aiStatusText = "Mengirim ke Gemini...",
-                chatMessages = it.chatMessages + userMsg + aiPlaceholder
+                chatMessages = compactedHistory + userMsg + aiPlaceholder
             )
         }
 
@@ -1103,6 +1105,45 @@ object AiAssistantSession {
     fun deleteSolvedTask(id: String) {
         _uiState.update { state ->
             state.copy(solvedTasks = state.solvedTasks.filterNot { it.id == id })
+        }
+    }
+
+    fun trimBitmapCache() {
+        _uiState.update { state ->
+            state.copy(
+                pendingToolBitmap = if (state.activeToolInputDialog == null) null else state.pendingToolBitmap,
+                chatMessages = trimOldChatBitmaps(state.chatMessages, keepCount = 1)
+            )
+        }
+    }
+
+    private fun trimOldChatBitmaps(messages: List<AiChatMessage>, keepCount: Int): List<AiChatMessage> {
+        var remainingWithBitmap = keepCount
+        return messages.asReversed().map { msg ->
+            if (msg.attachedBitmap != null) {
+                if (remainingWithBitmap > 0) {
+                    remainingWithBitmap--
+                    msg
+                } else {
+                    msg.copy(attachedBitmap = null)
+                }
+            } else {
+                msg
+            }
+        }.asReversed()
+    }
+
+    private fun downscaleThumbnail(bitmap: Bitmap, maxDim: Int): Bitmap {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= maxDim && h <= maxDim) return bitmap
+        val ratio = maxDim.toFloat() / maxOf(w, h).toFloat()
+        val targetW = (w * ratio).toInt().coerceAtLeast(1)
+        val targetH = (h * ratio).toInt().coerceAtLeast(1)
+        return try {
+            Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+        } catch (_: Throwable) {
+            bitmap
         }
     }
 

@@ -407,6 +407,17 @@ class ScreenProjectionService : Service() {
             .build()
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_RUNNING_LOW || level >= TRIM_MEMORY_UI_HIDDEN) {
+            synchronized(imageLock) {
+                lastHeldImage?.close()
+                lastHeldImage = null
+                cachedLastBitmap = null
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         releaseProjectionResources()
